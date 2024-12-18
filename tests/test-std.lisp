@@ -1,0 +1,41 @@
+(load ./std.lisp)
+
+(print '(testing not))
+(not t)
+(not nil)
+
+(print '(testing and))
+(and t t)
+(and t nil)
+(and nil t)
+(and nil nil)
+
+(print '(testing or))
+(or t t)
+(or t nil)
+(or nil t)
+(or nil nil)
+
+(print '(testing xor))
+(xor t t)
+(xor t nil)
+(xor nil t)
+(xor nil nil)
+
+(print '(testing length))
+(length nil)
+(length '())
+(length '(1))
+(length '(1 2))
+(length (cons 1 nil))
+(length (cons 1 (cons 2 nil)))
+(length '(1 2 3 4 5 6 7 8 9 10))
+
+(print '(testing append))
+(print (append '(1 2 3) 1))
+(print (append '(1 2 3) (append '(4 5) 6)))
+(print (append '(1 2 3) '(1 2 3)))
+
+(print '(testing mapcar))
+(defun double (x) (+ x x))
+(mapcar double (quote (1 2 3)))
