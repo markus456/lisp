@@ -241,6 +241,7 @@ void collect_garbage()
 }
 
 // Object creation
+Object* symbol_lookup(Object* scope, Object* sym);
 
 Object* allocate()
 {
@@ -379,6 +380,21 @@ void define_builtin_function(const char* name, Function fn)
     sym = symbol(name);
 
     bind_value(Env, sym, func);
+    POP();
+}
+
+void define_alias(const char* name, const char* alias)
+{
+    Object* sym = Nil;
+    Object* sym_alias = Nil;
+    Object* val = Nil;
+    PUSH3(sym, sym_alias, val);
+
+    sym = symbol(name);
+    sym_alias = symbol(alias);
+    val = symbol_lookup(Env, sym);
+    bind_value(Env, sym_alias, val);
+
     POP();
 }
 
@@ -1466,6 +1482,9 @@ void define_builtins()
     define_builtin_function("print", builtin_print);
     define_builtin_function("load", builtin_load);
     define_builtin_function("exit", builtin_exit);
+
+    // Some common aliases
+    define_alias("define", "defvar");
 }
 
 void parse()
