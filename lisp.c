@@ -574,29 +574,22 @@ Object* parse_list()
 Object* parse_number()
 {
     char ch = get();
-    bool negative = ch == '-';
-
-    if (negative)
-    {
-        ch = get();
-    }
-
-    unsigned int val = ch - '0';
+    uint64_t val = ch - '0';
 
     while (isdigit(peek()))
     {
         ch = get();
         val = ch - '0' + val * 10;
 
-        if (val >= INT_MAX)
+        if (val >= LONG_MAX)
         {
             error("Integer overflow");
             return Nil;
         }
     }
 
-    int ival = val;
-    return make_number(negative ? -ival : ival);
+    int64_t ival = val;
+    return make_number(ival);
 }
 
 Object* parse_quote()
@@ -678,8 +671,31 @@ Object* parse_expr()
         case '7':
         case '8':
         case '9':
-        case '-':
             return parse_number();
+
+        case '-':
+            {
+                get();
+                Object* o;
+
+                if (isdigit(peek()))
+                {
+                    o = parse_number();
+                    o->number = -o->number;
+                }
+                else if (isspace(peek()))
+                {
+                    o = symbol("-");
+                }
+                else
+                {
+                    o = parse_symbol();
+                    memmove(o->name + 1, o->name, strlen(o->name));
+                    o->name[0] = '-';
+                }
+
+                return o;
+            }
 
         case '\'':
             return parse_quote();
@@ -907,6 +923,12 @@ Object* eval(Object* scope, Object* obj)
 
 Object* builtin_add(Object* scope, Object* args)
 {
+    if (args == Nil)
+    {
+        error("Not enough arguments to '+'.");
+        return Nil;
+    }
+
     PUSH2(scope, args);
     int64_t sum = 0;
 
@@ -930,20 +952,44 @@ Object* builtin_add(Object* scope, Object* args)
 
 Object* builtin_sub(Object* scope, Object* args)
 {
+    if (args == Nil)
+    {
+        error("Not enough arguments to '-'.");
+        return Nil;
+    }
+
     PUSH2(scope, args);
     int64_t sum = 0;
 
-    for (; args != Nil; args = args->cdr)
+    Object* o = eval(scope, args->car);
+
+    if (o->type != TYPE_NUMBER)
     {
-        Object* o = eval(scope, args->car);
+        error("Not a number");
+        return Nil;
+    }
 
-        if (o->type != TYPE_NUMBER)
+    sum = o->number;
+    args = args->cdr;
+
+    if (args == Nil)
+    {
+        sum = -sum;
+    }
+    else
+    {
+        for (; args != Nil; args = args->cdr)
         {
-            error("Not a number");
-            return Nil;
-        }
+            o = eval(scope, args->car);
 
-        sum -= o->number;
+            if (o->type != TYPE_NUMBER)
+            {
+                error("Not a number");
+                return Nil;
+            }
+
+            sum -= o->number;
+        }
     }
 
     POP();
