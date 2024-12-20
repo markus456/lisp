@@ -14,6 +14,7 @@
 #define MAX_SYMBOL_LEN 55
 
 #define ALWAYS_GC 0
+#define USE_TAILCALLS 1
 
 enum ObjectType {TYPE_NIL = 0, TYPE_TRUE = 1, TYPE_NUMBER = 2, TYPE_SYMBOL = 3, TYPE_BUILTIN = 4,
                  TYPE_CELL = 5, TYPE_FUNCTION = 6, TYPE_MACRO = 7, TYPE_MOVED = 8};
@@ -24,6 +25,8 @@ typedef struct Object* (*Function) (struct Object*, struct Object*);
 
 struct Object
 {
+    uint8_t type;
+
     union
     {
         // Number
@@ -48,10 +51,15 @@ struct Object
             Object* func_env;
         };
 
+        // The "301 Moved Permanently" pointer that's set during GC
         Object* moved;
-    };
 
-    uint8_t type;
+        // The special value where the return value is stashed for tail calls
+        struct {
+            Object* tail_expr;
+            Object* tail_scope;
+        };
+    };
 };
 
 #define MAX_VARS 7
@@ -76,10 +84,13 @@ Frame* stack_top = NULL;
 #define POP() stack_top = frame.next;
 
 Object Nil_obj = {.type = TYPE_NIL, .number = 0};
-#define Nil &Nil_obj
+#define Nil (&Nil_obj)
 
 Object True_obj = {.type = TYPE_TRUE, .number = 0};
-#define True &True_obj
+#define True (&True_obj)
+
+Object TailCall_obj = {.type = TYPE_TRUE, .number = 0};
+#define TailCall (&TailCall_obj)
 
 Object* AllSymbols = Nil;
 Object* Env = Nil;
@@ -92,6 +103,7 @@ bool is_running = true;
 bool is_error = false;
 bool echo = false;
 bool is_debug = false;
+bool is_stack_trace = false;
 bool verbose_gc = false;
 int debug_step = 0;
 int debug_depth = 0;
@@ -383,15 +395,15 @@ void print_scope(Object* scope)
 {
     int num_scopes = 0;
 
-    for (Object* s = scope; s; s = s->cdr)
+    for (Object* s = scope; s != Nil; s = s->cdr)
     {
         ++num_scopes;
     }
 
-    for (Object* s = scope; s; s = s->cdr)
+    for (Object* s = scope; s != Nil; s = s->cdr)
     {
         printf("===== Scope %d =====\n", num_scopes--);
-        print(s);
+        print(s->car);
     }
 }
 
@@ -429,6 +441,7 @@ Object* symbol_lookup(Object* scope, Object* sym)
 void print_one(Object* obj)
 {
     assert(obj);
+    assert(obj != TailCall);
 
     switch (obj->type)
     {
@@ -475,6 +488,9 @@ void print_one(Object* obj)
         break;
     case TYPE_BUILTIN:
         printf("<builtin> ");
+        break;
+    default:
+        assert(false);
         break;
     }
 }
@@ -727,6 +743,7 @@ Object* eval_cell(Object* scope, Object* obj)
     Object* next_scope = Nil;
     PUSH7(scope, obj, ret, fn, param, arg, next_scope);
 
+ start:
     fn = eval(scope, obj->car);
 
     if (fn->type == TYPE_MACRO)
@@ -743,7 +760,8 @@ Object* eval_cell(Object* scope, Object* obj)
         next_scope = new_scope(fn->func_env != Nil ? fn->func_env : scope);
         param = fn->func_params;
         arg = obj->cdr;
-        assert(arg->type == TYPE_CELL);
+        assert(param == Nil || param->type == TYPE_CELL);
+        assert(arg == Nil || arg->type == TYPE_CELL);
 
         while (param != Nil && arg != Nil)
         {
@@ -765,13 +783,58 @@ Object* eval_cell(Object* scope, Object* obj)
         }
         else
         {
+            if (fn->func_body->type == TYPE_CELL)
+            {
+                debug("Function body is a list, evaluating in the same frame");
+                obj = fn->func_body;
+                scope = next_scope;
+                goto start;
+            }
+
             ret = eval(next_scope, fn->func_body);
+        }
+
+        if (is_debug)
+        {
+            printf("Return from: ");
+            print(fn->func_body);
         }
     }
     else
     {
         error("Not a function");
         print(fn);
+    }
+
+    if (ret == TailCall)
+    {
+        obj = ret->tail_expr;
+        scope = ret->tail_scope;
+        ret = Nil;
+
+        if (obj->type == TYPE_CELL)
+        {
+            if (is_stack_trace)
+            {
+                printf("Doing tail call: ");
+                print(obj);
+                printf(":::::::::::: DO TAIL :::::::::::::::::\n");
+                print(scope->car);
+            }
+
+            goto start;
+        }
+
+        if (is_stack_trace)
+        {
+            printf("NOT doing tail call: ");
+            print(obj);
+            printf(":::::::::::: DO NOT TAIL :::::::::::::::::\n");
+            print(scope->car);
+        }
+
+        // Not a list, evalue it here
+        ret = eval(scope, obj);
     }
 
     POP();
@@ -782,24 +845,25 @@ Object* eval(Object* scope, Object* obj)
 {
     assert(obj);
     Object* ret = Nil;
-    PUSH1(scope);
+    PUSH2(scope, obj);
 
-    if (is_error)
+    if (is_stack_trace)
     {
-        POP();
-        return ret;
-    }
-
-    if (is_debug)
-    {
+        printf("EVAL %d (%d) ", debug_step++, debug_depth);
         for (int i = 0; i < debug_depth; i++)
         {
             printf(". ");
         }
 
-        printf("EVAL %d: ", debug_step++);
+        printf(": ");
         print(obj);
         ++debug_depth;
+    }
+
+    if (is_error)
+    {
+        POP();
+        return ret;
     }
 
     switch (obj->type)
@@ -826,10 +890,12 @@ Object* eval(Object* scope, Object* obj)
         break;
     }
 
-    if (is_debug)
+    if (is_stack_trace)
     {
         --debug_depth;
-        printf("Returning: ");
+        printf("RET: ");
+        print(obj);
+        printf(" -> ");
         print(ret);
     }
 
@@ -1056,35 +1122,53 @@ Object* builtin_eq(Object* scope, Object* args)
         return Nil;
     }
 
+    PUSH2(scope, args);
     Object* lhs = eval(scope, args->car);
     Object* rhs = eval(scope, args->cdr->car);
 
     if (lhs->type != rhs->type)
     {
+        POP();
         return Nil;
     }
+
+    Object* ret = Nil;
 
     switch (lhs->type)
     {
     case TYPE_NIL:
     case TYPE_TRUE:
-        return True;
+        ret = True;
+        break;
 
     case TYPE_CELL:
     case TYPE_BUILTIN:
     case TYPE_FUNCTION:
     case TYPE_MACRO:
-        return Nil;
+        ret = Nil;
+        break;
 
     case TYPE_NUMBER:
-        return lhs->number == rhs->number ? True : Nil;
+        ret = lhs->number == rhs->number ? True : Nil;
+        break;
 
     case TYPE_SYMBOL:
-        return strcmp(lhs->name, rhs->name) == 0 ? True : Nil;
+        ret = strcmp(lhs->name, rhs->name) == 0 ? True : Nil;
+        break;
+
+    default:
+        assert(!true);
+        break;
     }
 
-    assert(!true);
-    return Nil;
+    if (is_debug)
+    {
+        printf("Equals: ");
+        print(ret);
+    }
+
+    POP();
+    return ret;
 }
 
 Object* builtin_if(Object* scope, Object* args)
@@ -1096,8 +1180,8 @@ Object* builtin_if(Object* scope, Object* args)
     }
 
     PUSH2(scope, args);
-
     Object* cond = eval(scope, args->car);
+    Object* res = cond != Nil ? args->cdr->car : args->cdr->cdr->car;
 
     if (is_debug)
     {
@@ -1107,29 +1191,38 @@ Object* builtin_if(Object* scope, Object* args)
         print(cond);
 
         printf("Evaluating ");
-        print(cond != Nil ? args->cdr->car : args->cdr->cdr->car);
+        print(res);
     }
 
-    Object* res = eval(scope, cond != Nil ? args->cdr->car : args->cdr->cdr->car);
+#if USE_TAILCALLS
+    TailCall->tail_expr = res;
+    TailCall->tail_scope = scope;
+    res = TailCall;
+#else
+    res = eval(scope, res);
 
     if (is_debug)
     {
         printf("Evaluated to ");
         print(res);
     }
+#endif
 
+    POP();
     return res;
 }
 
 Object* builtin_progn(Object* scope, Object* args)
 {
     Object* ret = Nil;
+    PUSH2(scope, args);
 
     for (; args != Nil; args = args->cdr)
     {
          ret = eval(scope, args->car);
     }
 
+    POP();
     return ret;
 }
 
@@ -1227,15 +1320,21 @@ Object* builtin_macroexpand(Object* scope, Object* args)
         return Nil;
     }
 
+    PUSH2(scope, args);
     Object* macro = eval(scope, args->car);
+    Object* ret = Nil;
 
     if (macro->type != TYPE_MACRO)
     {
         error("%s is not a macro", args->name);
-        return Nil;
+    }
+    else
+    {
+        ret = expand_macro(scope, macro, args->cdr->car);
     }
 
-    return expand_macro(scope, macro, args->cdr->car);
+    POP();
+    return ret;
 }
 
 Object* builtin_load(Object* scope, Object* args)
@@ -1261,14 +1360,18 @@ Object* builtin_load(Object* scope, Object* args)
     }
 
     input = f;
+    Object* expr = Nil;
+    Object* ret = Nil;
+    PUSH3(scope, expr, ret);
 
     while (peek() != EOF)
     {
-        Object* expr = parse_expr(scope);
+        expr = parse_expr();
 
         if (expr)
         {
-            print(eval(scope, expr));
+            ret = eval(scope, expr);
+            print(ret);
         }
         else
         {
@@ -1279,6 +1382,7 @@ Object* builtin_load(Object* scope, Object* args)
     fclose(f);
     input = stdin;
 
+    POP();
     return Nil;
 }
 
@@ -1329,7 +1433,7 @@ void parse()
     fflush(stdout);
 
     is_error = false;
-    Object* obj = parse_expr(Env);
+    Object* obj = parse_expr();
 
     if (echo)
     {
@@ -1362,7 +1466,7 @@ int main(int argc, char** argv)
     int ch;
     input = stdin;
 
-    while ((ch  = getopt(argc, argv, "dgexm:")) != -1)
+    while ((ch  = getopt(argc, argv, "dgesxm:")) != -1)
     {
         switch (ch)
         {
@@ -1378,7 +1482,12 @@ int main(int argc, char** argv)
             verbose_gc = true;
             break;
 
+        case 's':
+            is_stack_trace = true;
+            break;
+
         case 'd':
+            is_stack_trace = true;
             is_debug = true;
             break;
 
