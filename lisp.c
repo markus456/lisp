@@ -1294,12 +1294,25 @@ Object* builtin_progn(Object* scope, Object* args)
     Object* ret = Nil;
     PUSH2(scope, args);
 
-    for (; args != Nil; args = args->cdr)
+    for (; args != Nil && args->cdr != Nil; args = args->cdr)
     {
          ret = eval(scope, args->car);
     }
 
     POP();
+
+    if (args != Nil)
+    {
+        assert(args->cdr == Nil);
+#if USE_TAILCALLS
+        TailCall->tail_expr = args->car;
+        TailCall->tail_scope = scope;
+        ret = TailCall;
+#else
+        ret = eval(scope, args);
+#endif
+    }
+
     return ret;
 }
 
