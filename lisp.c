@@ -742,6 +742,13 @@ Object* expand_macro(Object* scope, Object* macro, Object* args)
 
     while (param != Nil && args != Nil)
     {
+        assert(param->type == TYPE_CELL);
+
+        if (args->type != TYPE_CELL)
+        {
+            break;
+        }
+
         bind_value(scope, param->car, args->car);
         param = param->cdr;
         args = args->cdr;
@@ -749,13 +756,21 @@ Object* expand_macro(Object* scope, Object* macro, Object* args)
 
     Object* ret = Nil;
 
-    if (param != Nil)
+    if (args != Nil)
+    {
+        if (args->type == TYPE_CELL)
+        {
+            error("Too many arguments to macro");
+        }
+        else
+        {
+            error("Invalid argument type:");
+            print(args);
+        }
+    }
+    else if (param != Nil)
     {
         error("Not enough arguments to macro");
-    }
-    else if (args != Nil)
-    {
-        error("Too many arguments to macro");
     }
     else
     {
@@ -834,7 +849,7 @@ Object* eval_cell(Object* scope, Object* obj)
     }
     else
     {
-        error("Not a function");
+        error("Not a function:");
         print(fn);
     }
 
@@ -1092,7 +1107,7 @@ Object* builtin_apply(Object* scope, Object* args)
 
     if (func_args->type != TYPE_CELL)
     {
-        error("Argument for apply are not a list");
+        error("Arguments for apply are not a list");
         POP();
         return Nil;
     }

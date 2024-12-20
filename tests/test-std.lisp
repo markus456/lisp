@@ -38,4 +38,4 @@
 
 (print '(testing mapcar))
 (defun double (x) (+ x x))
-(mapcar double (quote (1 2 3)))
+(mapcar double '(1 2 3))
