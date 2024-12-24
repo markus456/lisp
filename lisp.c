@@ -10,6 +10,7 @@
 #include <ctype.h>
 #include <limits.h>
 #include <errno.h>
+#include <time.h>
 
 #define MAX_SYMBOL_LEN 55
 
@@ -102,9 +103,8 @@ uint8_t* mem_ptr;
 bool is_running = true;
 bool is_error = false;
 bool echo = false;
-bool is_debug = false;
-bool is_stack_trace = false;
 bool verbose_gc = false;
+bool quiet = false;
 int debug_step = 0;
 int debug_depth = 0;
 size_t memory_size = 1024 * 1024;
@@ -125,6 +125,15 @@ void error(const char* fmt, ...)
     printf("\n");
 }
 
+#ifdef NDEBUG
+#define is_debug false
+#define is_stack_trace false
+void debug(const char*, ...)
+{
+}
+#else
+bool is_debug = false;
+bool is_stack_trace = false;
 void debug(const char* fmt, ...)
 {
     if (is_debug)
@@ -136,6 +145,7 @@ void debug(const char* fmt, ...)
         printf("\n");
     }
 }
+#endif
 
 // Garbage collection
 
@@ -791,6 +801,7 @@ Object* eval_cell(Object* scope, Object* obj)
     PUSH7(scope, obj, ret, fn, param, arg, next_scope);
 
  start:
+
     fn = eval(scope, obj->car);
 
     if (fn->type == TYPE_MACRO)
@@ -820,19 +831,21 @@ Object* eval_cell(Object* scope, Object* obj)
 
         if (param != Nil)
         {
-            error("Not enough arguments to function. Expected %d, have %d.",
+            error("Not enough arguments to function '%s'. Expected %d, have %d.",
+                  obj->car->type == TYPE_SYMBOL ? obj->car->name : "<func>",
                   length(fn->func_params), length(obj->cdr));
         }
         else if (arg != Nil)
         {
-            error("Too many arguments to function. Expected %d, have %d.",
+            error("Too many arguments to function '%s'. Expected %d, have %d.",
+                  obj->car->type == TYPE_SYMBOL ? obj->car->name : "<func>",
                   length(fn->func_params), length(obj->cdr));
         }
         else
         {
             if (fn->func_body->type == TYPE_CELL)
             {
-                debug("Function body is a list, evaluating in the same frame");
+                debug("Function body is a list, evaluating in the same frame:");
                 obj = fn->func_body;
                 scope = next_scope;
                 goto start;
@@ -846,6 +859,11 @@ Object* eval_cell(Object* scope, Object* obj)
             printf("Return from: ");
             print(fn->func_body);
         }
+    }
+    else if (is_error)
+    {
+        debug("Error, return fast");
+        assert(fn == Nil);
     }
     else
     {
@@ -1105,7 +1123,7 @@ Object* builtin_apply(Object* scope, Object* args)
     func = eval(scope, args->car);
     func_args = eval(scope, args->cdr->car);
 
-    if (func_args->type != TYPE_CELL)
+    if (func_args != Nil && func_args->type != TYPE_CELL)
     {
         error("Arguments for apply are not a list");
         POP();
@@ -1131,6 +1149,40 @@ Object* builtin_print(Object* scope, Object* args)
 
     POP();
     return Nil;
+}
+
+Object* builtin_writechar(Object* scope, Object* args)
+{
+    if (args == Nil || args->cdr != Nil)
+    {
+        error("'write-char' takes exactly one argument.");
+    }
+    else
+    {
+        Object* obj = eval(scope, args->car);
+
+        if (obj->type == TYPE_NUMBER)
+        {
+            unsigned char ch = obj->number;
+            fwrite(&ch, 1, 1, stdout);
+        }
+        else if (obj->type == TYPE_SYMBOL)
+        {
+            fwrite(obj->name, strlen(obj->name), 1, stdout);
+        }
+        else
+        {
+            error("'write-char' takes a symbol or a number as its argument.");
+            print(obj);
+        }
+    }
+
+    return Nil;
+}
+
+Object* builtin_rand(Object*, Object*)
+{
+    return make_number(rand());
 }
 
 Object* builtin_cons(Object* scope, Object* args)
@@ -1461,7 +1513,11 @@ Object* builtin_load(Object* scope, Object* args)
         if (expr)
         {
             ret = eval(scope, expr);
-            print(ret);
+
+            if (!quiet)
+            {
+                print(ret);
+            }
         }
         else
         {
@@ -1508,6 +1564,8 @@ void define_builtins()
 
     // Debug, OS, etc.
     define_builtin_function("print", builtin_print);
+    define_builtin_function("write-char", builtin_writechar);
+    define_builtin_function("rand", builtin_rand);
     define_builtin_function("load", builtin_load);
     define_builtin_function("exit", builtin_exit);
 
@@ -1522,8 +1580,11 @@ void parse()
         debug_step = 0;
     }
 
-    printf("> ");
-    fflush(stdout);
+    if (!quiet)
+    {
+        printf("> ");
+        fflush(stdout);
+    }
 
     is_error = false;
     Object* obj = parse_expr();
@@ -1540,8 +1601,12 @@ void parse()
             printf("======================================================================\n");
         }
 
-        print(eval(Env, obj));
-        collect_garbage();
+        obj = eval(Env, obj);
+
+        if (!quiet)
+        {
+            print(obj);
+        }
     }
     else if (peek() == EOF)
     {
@@ -1558,8 +1623,9 @@ int main(int argc, char** argv)
 {
     int ch;
     input = stdin;
+    srand(time(NULL));
 
-    while ((ch  = getopt(argc, argv, "dgesxm:")) != -1)
+    while ((ch = getopt(argc, argv, "dgesxm:q")) != -1)
     {
         switch (ch)
         {
@@ -1575,6 +1641,7 @@ int main(int argc, char** argv)
             verbose_gc = true;
             break;
 
+#ifndef NDEBUG
         case 's':
             is_stack_trace = true;
             break;
@@ -1582,6 +1649,10 @@ int main(int argc, char** argv)
         case 'd':
             is_stack_trace = true;
             is_debug = true;
+            break;
+#endif
+        case 'q':
+            quiet = true;
             break;
 
         default:
