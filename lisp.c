@@ -113,7 +113,6 @@ uint8_t* mem_root;
 uint8_t* mem_end;
 uint8_t* mem_ptr;
 bool is_running = true;
-bool is_error = false;
 bool echo = false;
 bool verbose_gc = false;
 bool quiet = false;
@@ -125,16 +124,17 @@ void debug(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
 void print(Object* obj);
 void print_one(Object* obj);
 
+char error_stack[16][128];
+uint8_t error_ptr = 0;
+
 void error(const char* fmt, ...)
 {
-    is_error = true;
-
+    int slot = error_ptr % 16;
     va_list args;
     va_start(args, fmt);
-    printf("Error: ");
-    vprintf(fmt, args);
+    vsnprintf(error_stack[slot], sizeof(error_stack[0]), fmt, args);
     va_end(args);
-    printf("\n");
+    error_ptr++;
 }
 
 #ifdef NDEBUG
@@ -876,11 +876,6 @@ Object* eval_cell(Object* scope, Object* obj)
             print(fn->func_body);
         }
     }
-    else if (is_error)
-    {
-        debug("Error, return fast");
-        assert(fn == Nil);
-    }
     else
     {
         error("Not a function:");
@@ -939,12 +934,6 @@ Object* eval(Object* scope, Object* obj)
         printf(": ");
         print(obj);
         ++debug_depth;
-    }
-
-    if (is_error)
-    {
-        POP();
-        return ret;
     }
 
     switch (obj->type)
@@ -1604,7 +1593,6 @@ void parse()
         fflush(stdout);
     }
 
-    is_error = false;
     Object* obj = parse_expr();
 
     if (echo)
@@ -1624,6 +1612,22 @@ void parse()
         if (!quiet)
         {
             print(obj);
+        }
+        else if (error_ptr)
+        {
+            --error_ptr;
+
+            for (int i = 16; i >= 0; i--)
+            {
+                int slot = error_ptr - i;
+
+                if (slot >= 0)
+                {
+                    printf("Error: %s\n", error_stack[slot % 16]);
+                }
+            }
+
+            error_ptr = 0;
         }
     }
     else if (peek() == EOF)
