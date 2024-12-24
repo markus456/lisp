@@ -1,6 +1,16 @@
 # lisp
 
-A simple lisp interpreter
+A simple lisp interpreter.
+
+# Building the Example
+
+An example Game of Life program written in this Lisp language is included. To
+build it:
+
+```
+make release
+./lisp -q < game-of-life.lisp
+```
 
 # Language Features
 
@@ -10,13 +20,15 @@ A simple lisp interpreter
 - Names are case-sensitive: `T` and `t` are not the same symbol and thus
   `(eq T t)` will raise an undefined symbol error.
 
-- Tail recursion is supported for the `if` function.
+- Tail recursion is supported for both branches of the `if` function and
+  the last argument of the `progn` function.
 
 ### Special Forms (builtin functions)
 
 - `+`: Adds all the arguments together.
 
-- `-`: Subtracts all the arguments, can be used to negate numbers.
+- `-`: Subtracts all the values from the first one. If given only one argument,
+  negates it.
 
 - `<`: Compares two numbers and returns `t` if the first one is less than the
   second one.
@@ -47,7 +59,8 @@ A simple lisp interpreter
   variables in the scope that they can see and their values will be captured
   when the lambda function is created.
 
-- `define`: Defines the symbol given as the first argument to point to the second argument.
+- `define` and `defvar`: Defines the symbol given as the first argument to point
+  to the second argument.
 
 - `defun`: Defines a function. The first argument is the function name, the
   second is the argument list and the third argument is the function body.
@@ -64,9 +77,13 @@ A simple lisp interpreter
 
 - `print`: Prints the arguments to stdout after evaluating them.
 
-- `load`: Loads a lisp program from a file. Useful for loading libraries. File
+- `write-char`: Writes the input to stdout as unsigned bytes.
 
-- names that have spaces in them cannot be loaded.
+- `rand`: Return a "random" number. This uses the C `rand()` function seeded to
+  the current time so it's not a very reliable source of randomness.
+
+- `load`: Loads a lisp program from a file. Useful for loading libraries. File
+  names that have spaces in them cannot be loaded.
 
 - `exit`: Exits the program immediately.
 
