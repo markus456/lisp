@@ -80,13 +80,14 @@ struct Frame
 typedef struct Frame Frame;
 Frame* stack_top = NULL;
 
-#define ENTER() Frame frame = {0}; frame.next = stack_top; stack_top = &frame
-#define PUSH1(a) ENTER(); frame.vars[0] = &a;
-#define PUSH2(a, b) PUSH1(a);  frame.vars[1] = &b;
-#define PUSH3(a, b, c) PUSH2(a, b); frame.vars[2] = &c;
-#define PUSH4(a, b, c, d) PUSH3(a, b, c); frame.vars[3] = &d;
-#define PUSH5(a, b, c, d, e) PUSH4(a, b, c, d); frame.vars[4] = &e;
-#define PUSH6(a, b, c, d, e, f) PUSH5(a, b, c, d, e); frame.vars[5] = &f;
+#define ENTER() Frame frame; frame.next = stack_top; stack_top = &frame
+#define SETEND(n) frame.vars[n] = NULL
+#define PUSH1(a) ENTER(); frame.vars[0] = &a; SETEND(1)
+#define PUSH2(a, b) PUSH1(a); frame.vars[1] = &b; SETEND(2)
+#define PUSH3(a, b, c) PUSH2(a, b); frame.vars[2] = &c; SETEND(3)
+#define PUSH4(a, b, c, d) PUSH3(a, b, c); frame.vars[3] = &d; SETEND(4)
+#define PUSH5(a, b, c, d, e) PUSH4(a, b, c, d); frame.vars[4] = &e; SETEND(5)
+#define PUSH6(a, b, c, d, e, f) PUSH5(a, b, c, d, e); frame.vars[5] = &f; SETEND(6)
 #define PUSH7(a, b, c, d, e, f, g) PUSH6(a, b, c, d, e, f); frame.vars[6] = &g;
 #define POP() stack_top = frame.next;
 
