@@ -15,7 +15,6 @@
 #define MAX_SYMBOL_LEN 55
 
 #define ALWAYS_GC 0
-#define USE_TAILCALLS 1
 
 enum ObjectType {TYPE_CONST    = 0x01,
                  TYPE_NUMBER   = 0x02,
@@ -1332,19 +1331,9 @@ Object* builtin_if(Object* scope, Object* args)
         print(res);
     }
 
-#if USE_TAILCALLS
     TailCall->tail_expr = res;
     TailCall->tail_scope = scope;
     res = TailCall;
-#else
-    res = eval(scope, res);
-
-    if (is_debug)
-    {
-        printf("Evaluated to ");
-        print(res);
-    }
-#endif
 
     POP();
     return res;
@@ -1365,13 +1354,9 @@ Object* builtin_progn(Object* scope, Object* args)
     if (args != Nil)
     {
         assert(args->cdr == Nil);
-#if USE_TAILCALLS
         TailCall->tail_expr = args->car;
         TailCall->tail_scope = scope;
         ret = TailCall;
-#else
-        ret = eval(scope, args);
-#endif
     }
 
     return ret;
