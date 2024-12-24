@@ -17,8 +17,14 @@
 #define ALWAYS_GC 0
 #define USE_TAILCALLS 1
 
-enum ObjectType {TYPE_NIL = 0, TYPE_TRUE = 1, TYPE_NUMBER = 2, TYPE_SYMBOL = 3, TYPE_BUILTIN = 4,
-                 TYPE_CELL = 5, TYPE_FUNCTION = 6, TYPE_MACRO = 7, TYPE_MOVED = 8};
+enum ObjectType {TYPE_CONST    = 0x01,
+                 TYPE_NUMBER   = 0x02,
+                 TYPE_SYMBOL   = 0x04,
+                 TYPE_BUILTIN  = 0x08,
+                 TYPE_CELL     = 0x10,
+                 TYPE_FUNCTION = 0x20,
+                 TYPE_MACRO    = 0x40,
+                 TYPE_MOVED    = 0x80};
 
 struct Object;
 typedef struct Object Object;
@@ -84,13 +90,13 @@ Frame* stack_top = NULL;
 #define PUSH7(a, b, c, d, e, f, g) PUSH6(a, b, c, d, e, f); frame.vars[6] = &g;
 #define POP() stack_top = frame.next;
 
-Object Nil_obj = {.type = TYPE_NIL, .number = 0};
+Object Nil_obj = {.type = TYPE_CONST, .number = 0};
 #define Nil (&Nil_obj)
 
-Object True_obj = {.type = TYPE_TRUE, .number = 0};
+Object True_obj = {.type = TYPE_CONST, .number = 0};
 #define True (&True_obj)
 
-Object TailCall_obj = {.type = TYPE_TRUE, .number = 0};
+Object TailCall_obj = {.type = TYPE_CONST, .number = 0};
 #define TailCall (&TailCall_obj)
 
 Object* AllSymbols = Nil;
@@ -195,8 +201,7 @@ void fix_references(Object* obj)
         obj->func_env = make_living(obj->func_env);
         break;
 
-    case TYPE_NIL:
-    case TYPE_TRUE:
+    case TYPE_CONST:
     case TYPE_MOVED:
     default:
         assert(!true);
@@ -482,11 +487,16 @@ void print_one(Object* obj)
     case TYPE_SYMBOL:
         printf("%s ", obj->name);
         break;
-    case TYPE_NIL:
-        printf("nil ");
-        break;
-    case TYPE_TRUE:
-        printf("t ");
+    case TYPE_CONST:
+        if (obj == True)
+        {
+            printf("t ");
+        }
+        else
+        {
+            assert(obj == Nil);
+            printf("nil ");
+        }
         break;
     case TYPE_CELL:
         {
@@ -938,9 +948,8 @@ Object* eval(Object* scope, Object* obj)
 
     switch (obj->type)
     {
+    case TYPE_CONST:
     case TYPE_NUMBER:
-    case TYPE_NIL:
-    case TYPE_TRUE:
     case TYPE_BUILTIN:
     case TYPE_FUNCTION:
     case TYPE_MACRO:
@@ -1276,8 +1285,7 @@ Object* builtin_eq(Object* scope, Object* args)
 
     switch (lhs->type)
     {
-    case TYPE_NIL:
-    case TYPE_TRUE:
+    case TYPE_CONST:
         ret = True;
         break;
 
