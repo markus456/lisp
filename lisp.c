@@ -96,6 +96,11 @@ Object TailCall_obj = {.type = TYPE_TRUE, .number = 0};
 Object* AllSymbols = Nil;
 Object* Env = Nil;
 
+#define CHECK0ARGS(args) args != Nil
+#define CHECK1ARGS(args) args->type != TYPE_CELL || CHECK0ARGS(args->cdr)
+#define CHECK2ARGS(args) args->type != TYPE_CELL || CHECK1ARGS(args->cdr)
+#define CHECK3ARGS(args) args->type != TYPE_CELL || CHECK2ARGS(args->cdr)
+
 FILE* input;
 uint8_t* mem_root;
 uint8_t* mem_end;
@@ -1047,7 +1052,7 @@ Object* builtin_sub(Object* scope, Object* args)
 
 Object* builtin_less(Object* scope, Object* args)
 {
-    if (length(args) != 2)
+    if (CHECK2ARGS(args))
     {
         error("< expects exactly two arguments");
         return Nil;
@@ -1072,6 +1077,12 @@ Object* builtin_less(Object* scope, Object* args)
 
 Object* builtin_quote(Object*, Object* args)
 {
+    if (CHECK1ARGS(args))
+    {
+        error("Quote takes exactly one argument");
+        return Nil;
+    }
+
     return args->car;
 }
 
@@ -1094,7 +1105,7 @@ Object* builtin_list(Object* scope, Object* args)
 
 Object* builtin_eval(Object* scope, Object* args)
 {
-    if (length(args) != 1)
+    if (CHECK1ARGS(args))
     {
         error("eval takes exactly one argument");
         return Nil;
@@ -1110,7 +1121,7 @@ Object* builtin_eval(Object* scope, Object* args)
 
 Object* builtin_apply(Object* scope, Object* args)
 {
-    if (length(args) != 2)
+    if (CHECK2ARGS(args))
     {
         error("apply takes exactly two arguments");
         return Nil;
@@ -1153,7 +1164,7 @@ Object* builtin_print(Object* scope, Object* args)
 
 Object* builtin_writechar(Object* scope, Object* args)
 {
-    if (args == Nil || args->cdr != Nil)
+    if (CHECK1ARGS(args))
     {
         error("'write-char' takes exactly one argument.");
     }
@@ -1187,7 +1198,7 @@ Object* builtin_rand(Object*, Object*)
 
 Object* builtin_cons(Object* scope, Object* args)
 {
-    if (length(args) != 2)
+    if (CHECK2ARGS(args))
     {
         error("cons takes exactly two arguments");
         return Nil;
@@ -1207,7 +1218,7 @@ Object* builtin_cons(Object* scope, Object* args)
 
 Object* builtin_car(Object* scope, Object* args)
 {
-    if (length(args) != 1)
+    if (CHECK1ARGS(args))
     {
         error("car takes a list as its argument");
         return Nil;
@@ -1226,7 +1237,7 @@ Object* builtin_car(Object* scope, Object* args)
 
 Object* builtin_cdr(Object* scope, Object* args)
 {
-    if (length(args) != 1)
+    if (CHECK1ARGS(args))
     {
         error("cdr takes a list as its argument");
         return Nil;
@@ -1245,7 +1256,7 @@ Object* builtin_cdr(Object* scope, Object* args)
 
 Object* builtin_eq(Object* scope, Object* args)
 {
-    if (length(args) != 2)
+    if (CHECK2ARGS(args))
     {
         error("= takes exactly two arguments");
         return Nil;
@@ -1302,7 +1313,7 @@ Object* builtin_eq(Object* scope, Object* args)
 
 Object* builtin_if(Object* scope, Object* args)
 {
-    if (length(args) != 3)
+    if (CHECK3ARGS(args))
     {
         error("if takes exactly three arguments");
         return Nil;
@@ -1376,7 +1387,7 @@ Object* builtin_exit(Object*, Object*)
 
 Object* builtin_lambda(Object* scope, Object* args)
 {
-    if (length(args) != 2)
+    if (CHECK2ARGS(args))
     {
         error("lambda takes exactly two arguments");
         print(args);
@@ -1391,11 +1402,9 @@ Object* builtin_lambda(Object* scope, Object* args)
 
 Object* builtin_define(Object* scope, Object* args)
 {
-    int n = length(args);
-
-    if (n != 2)
+    if (CHECK2ARGS(args))
     {
-        error("define takes exactly two arguments, have %d", n);
+        error("define takes exactly two arguments");
         return Nil;
     }
 
@@ -1417,7 +1426,7 @@ Object* builtin_define(Object* scope, Object* args)
 
 Object* builtin_defun(Object* scope, Object* args)
 {
-    if (length(args) != 3)
+    if (CHECK3ARGS(args))
     {
         error("defun takes exactly three arguments");
         return Nil;
@@ -1437,7 +1446,7 @@ Object* builtin_defun(Object* scope, Object* args)
 
 Object* builtin_defmacro(Object* scope, Object* args)
 {
-    if (length(args) != 3)
+    if (CHECK3ARGS(args))
     {
         error("defmacro takes exactly three arguments");
         return Nil;
@@ -1450,7 +1459,7 @@ Object* builtin_defmacro(Object* scope, Object* args)
 
 Object* builtin_macroexpand(Object* scope, Object* args)
 {
-    if (length(args) != 2)
+    if (CHECK2ARGS(args))
     {
         error("macroexpand takes exactly two arguments");
         return Nil;
@@ -1481,7 +1490,7 @@ Object* builtin_macroexpand(Object* scope, Object* args)
 
 Object* builtin_load(Object* scope, Object* args)
 {
-    if (length(args) != 1)
+    if (CHECK1ARGS(args))
     {
         error("load takes exactly one argument");
         return Nil;
