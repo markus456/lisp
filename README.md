@@ -45,8 +45,8 @@ make release
   type and compare equal or `nil` if they don't. Only numbers and symbols can be
   compared.
 
-- `if`: If the first argument evalues to a non-`nil` value, the second argument
-  is evaluated. Otherwise, the third argument is evaluated.
+- `if`: If the first argument evaluates to a non-`nil` value, the second
+  argument is evaluated. Otherwise, the third argument is evaluated.
 
 - `list`: Creates a list of all the arguments after evaluating them.
 
