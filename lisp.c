@@ -366,7 +366,7 @@ void bind_value(Object* scope, Object* symbol, Object* value)
 
         if (o->car->car == symbol)
         {
-            o->car->cdr->car = value;
+            o->car->cdr = value;
             return;
         }
     }
