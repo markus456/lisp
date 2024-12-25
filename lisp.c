@@ -1394,6 +1394,24 @@ Object* builtin_exit(Object*, Object*)
     return Nil;
 }
 
+Object* builtin_debug(Object* scope, Object* args)
+{
+    if (CHECK1ARGS(args))
+    {
+        error("debug takes exactly one argument");
+        return Nil;
+    }
+
+    Object* ret = eval(scope, args->car);
+#ifndef NDEBUG
+    is_debug = ret != Nil;
+#else
+    (void)ret;
+    error("debug is not usable in release mode");
+#endif
+    return Nil;
+}
+
 Object* builtin_lambda(Object* scope, Object* args)
 {
     if (CHECK2ARGS(args))
@@ -1586,6 +1604,7 @@ void define_builtins()
     define_builtin_function("rand", builtin_rand);
     define_builtin_function("load", builtin_load);
     define_builtin_function("exit", builtin_exit);
+    define_builtin_function("debug", builtin_debug);
 
     // Some common aliases
     define_alias("define", "defvar");
