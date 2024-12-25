@@ -29,7 +29,12 @@
 
 ;; Moves the cursor to the top left of the screen
 (defun reset_cursor ()
-  (progn (write-list '(escape '[ 50 'J escape '[ 'H))))
+  (write-list '(escape '[ 'H)))
+
+;; Clears the screen and moves the cursor to the top left
+(defun clear_screen ()
+  (progn (write-list '(escape '[ 50 'J))
+         (reset_cursor)))
 
 ;; (defun reset_cursor ()
 ;;   (progn (write-char escape)
@@ -93,4 +98,5 @@
          (main_loop (compute_cell_state state nil nil (- screen_width 1) (- screen_height 1)))))
 
 ;; Start the program
+(clear_screen)
 (main_loop state)
