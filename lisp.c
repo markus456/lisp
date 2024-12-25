@@ -55,6 +55,7 @@ struct Object
             Object* func_params;
             Object* func_body;
             Object* func_env;
+            bool    compiled;
         };
 
         // The "301 Moved Permanently" pointer that's set during GC
@@ -362,6 +363,7 @@ Object* make_function(Object* params, Object* body, Object* env)
     rv->func_params = params;
     rv->func_body = body;
     rv->func_env = env;
+    rv->compiled = false;
     POP();
     return rv;
 }
@@ -437,7 +439,15 @@ void define_alias(const char* name, const char* alias)
     sym = symbol(name);
     sym_alias = symbol(alias);
     val = symbol_lookup(Env, sym);
-    bind_value(Env, sym_alias, val);
+
+    if (val)
+    {
+        bind_value(Env, sym_alias, val);
+    }
+    else
+    {
+        error("Undefined symbol: %s", name);
+    }
 
     POP();
 }
@@ -488,14 +498,7 @@ Object* symbol_lookup(Object* scope, Object* sym)
         }
     }
 
-    error("Undefined symbol: %s", sym->name);
-
-    if (is_debug)
-    {
-        print_scope(scope);
-    }
-
-    return Nil;
+    return NULL;
 }
 
 void print_one(Object* obj)
@@ -541,11 +544,18 @@ void print_one(Object* obj)
         }
         break;
     case TYPE_FUNCTION:
-        printf("<func> ");
-        if (is_debug)
+        if (obj->compiled)
         {
-            print_one(obj->func_params);
-            print_one(obj->func_body);
+            printf("<compiled func> ");
+        }
+        else
+        {
+            printf("<func> ");
+            if (is_debug)
+            {
+                print_one(obj->func_params);
+                print_one(obj->func_body);
+            }
         }
         break;
     case TYPE_MACRO:
@@ -974,6 +984,18 @@ Object* eval(Object* scope, Object* obj)
 
     case TYPE_SYMBOL:
         ret = symbol_lookup(scope, obj);
+
+        if (!ret)
+        {
+            ret = Nil;
+            error("Undefined symbol: %s", obj->name);
+
+            if (is_debug)
+            {
+                print_scope(scope);
+            }
+
+        }
         break;
 
     default:
@@ -995,6 +1017,73 @@ Object* eval(Object* scope, Object* obj)
     POP();
 #endif
     return ret;
+}
+
+bool compile_function(Object* scope, Object* name, Object* self, Object* params, Object* body)
+{
+    bool ok = true;
+
+    if (body->type == TYPE_CELL && body->car->type == TYPE_SYMBOL)
+    {
+        bool is_param = false;
+
+        for (Object* p = params; p->type == TYPE_CELL; p = p->cdr)
+        {
+            if (p->car == body->car)
+            {
+                is_param = true;
+                break;
+            }
+        }
+
+        if (is_param)
+        {
+            debug("Symbol '%s' is a parameter of the function, not a builtin function", body->car->name);
+        }
+        else if (body->car == name)
+        {
+            debug("Symbol '%s' points to the function itself, resolving immediately", body->car->name);
+            body->car = self;
+        }
+        else
+        {
+            Object* val = symbol_lookup(scope, body->car);
+
+            if (!val)
+            {
+                error("Undefined symbol: %s", body->car->name);
+                ok = false;
+            }
+            else if (val->type == TYPE_BUILTIN || val->type == TYPE_FUNCTION || val->type == TYPE_MACRO)
+            {
+                debug("Symbol '%s' is a special form, function or macro.", body->car->name);
+                Object* global_val = symbol_lookup(Env, body->car);
+
+                if (val != global_val)
+                {
+                    debug("Symbol '%s' does not come from the global scope.", body->car->name);
+                }
+                else
+                {
+                    debug("Symbol '%s' is from the global scope, resolving immediately.", body->car->name);
+                    body->car = val;
+                }
+            }
+        }
+
+        for (body = body->cdr; body->type == TYPE_CELL; body = body->cdr)
+        {
+            if (body->car->type == TYPE_CELL)
+            {
+                if (!compile_function(scope, name, self, params, body->car))
+                {
+                    ok = false;
+                }
+            }
+        }
+    }
+
+    return ok;
 }
 
 // Builtin operators
@@ -1471,6 +1560,47 @@ Object* builtin_defun(Object* scope, Object* args)
     return func;
 }
 
+Object* builtin_compile(Object* scope, Object* args)
+{
+    for (; args->type == TYPE_CELL; args = args->cdr)
+    {
+        if (args->car->type != TYPE_SYMBOL)
+        {
+            error("Argument is not a symbol");
+        }
+        else
+        {
+            Object* name = args->car;
+            Object* func = symbol_lookup(scope, name);
+
+            if (!func)
+            {
+                error("Undefined symbol: %s", name->name);
+            }
+            else if (func->type != TYPE_FUNCTION)
+            {
+                error("Symbol '%s' does not point to a function", name->name);
+            }
+            else
+            {
+                // Resolve all of the symbols in the function body that point to known
+                // functions or macros with the final value. This removes the need for a
+                // symbol lookup during the execution of the function.
+                if (!compile_function(scope, name, func, func->func_params, func->func_body))
+                {
+                    error("Compilation failed");
+                }
+                else
+                {
+                    func->compiled = true;
+                }
+            }
+        }
+    }
+
+    return Nil;
+}
+
 Object* builtin_defmacro(Object* scope, Object* args)
 {
     if (CHECK3ARGS(args))
@@ -1592,6 +1722,7 @@ void define_builtins()
     define_builtin_function("lambda", builtin_lambda);
     define_builtin_function("define", builtin_define);
     define_builtin_function("defun", builtin_defun);
+    define_builtin_function("compile", builtin_compile);
     define_builtin_function("defmacro", builtin_defmacro);
     define_builtin_function("macroexpand", builtin_macroexpand);
 
