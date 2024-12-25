@@ -111,6 +111,7 @@ FILE* input;
 uint8_t* mem_root;
 uint8_t* mem_end;
 uint8_t* mem_ptr;
+bool grow_memory = false;
 bool is_running = true;
 bool echo = false;
 bool verbose_gc = false;
@@ -118,6 +119,7 @@ bool quiet = false;
 int debug_step = 0;
 int debug_depth = 0;
 size_t memory_size = 1024 * 1024;
+double memory_pct = 90.0;
 
 void debug(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
 void print(Object* obj);
@@ -213,8 +215,18 @@ void collect_garbage()
 {
     size_t space_size = memory_size / 2;
     size_t memory_used = mem_ptr - mem_root;
+    uint8_t* old_root = NULL;
 
-    if (mem_end == mem_root + space_size)
+    if (grow_memory)
+    {
+        old_root = mem_root;
+        memory_size *= 2;
+        space_size = memory_size / 2;
+        mem_root = malloc(memory_size);
+        mem_ptr = mem_root;
+        mem_end = mem_root + memory_size / 2;
+    }
+    else if (mem_end == mem_root + space_size)
     {
         mem_ptr = mem_root + space_size;
         mem_end = mem_root + memory_size;
@@ -248,15 +260,33 @@ void collect_garbage()
 
     assert(scan_ptr == mem_ptr);
 
+    size_t still_in_use = scan_ptr - scan_start;
+    double pct_in_use = ((double)still_in_use / (double)space_size) * 100.0;
+
     if (verbose_gc)
     {
-        size_t still_in_use = scan_ptr - scan_start;
         size_t memory_freed = memory_used - still_in_use;
+
+        if (grow_memory)
+        {
+            printf("\nMemory resized: %lu -> %lu\n", memory_size / 2, memory_size);
+        }
 
         if (memory_freed)
         {
-            printf("\nMemory freed: %lu Memory used: %lu\n", memory_freed, still_in_use);
+            double pct_freed = ((double)memory_freed / (double)space_size) * 100.0;
+            printf("\nMemory freed: %lu (%.1lf%%) Memory used: %lu (%.1lf%%)\n", memory_freed, pct_freed, still_in_use, pct_in_use);
         }
+    }
+
+    if (grow_memory)
+    {
+        grow_memory = false;
+        free(old_root);
+    }
+    else if (pct_in_use > memory_pct)
+    {
+        grow_memory = true;
     }
 }
 
@@ -272,12 +302,6 @@ Object* allocate()
     if (mem_ptr + sizeof(Object) > mem_end)
     {
         collect_garbage();
-
-        if (mem_ptr + sizeof(Object) > mem_end)
-        {
-            error("Not enough memory");
-            abort();
-        }
     }
 
     Object* rv = (Object*)mem_ptr;
@@ -1639,7 +1663,7 @@ int main(int argc, char** argv)
         switch (ch)
         {
         case 'm':
-            memory_size = atoi(optarg);
+            memory_pct = atof(optarg);
             break;
 
         case 'e':
@@ -1668,6 +1692,15 @@ int main(int argc, char** argv)
             printf("Unknown option: %c\n", ch);
             return 1;
         }
+    }
+
+    if (memory_pct > 99.0)
+    {
+        memory_pct = 99.0;
+    }
+    else if (memory_pct < 1.0)
+    {
+        memory_pct = 1.0;
     }
 
     memory_size = ((memory_size / sizeof(Object)) + 1) * sizeof(Object);
