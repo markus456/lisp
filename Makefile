@@ -11,3 +11,6 @@ test: lisp
 
 clean:
 	rm lisp
+
+demo: release
+	./lisp -q < game-of-life.lisp

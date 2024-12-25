@@ -1,9 +1,10 @@
 (load std.lisp)
+;; Configuration
+(defvar iterations 1000)
 (defvar screen_width 50)
 (defvar screen_height 35)
-(defvar state (generate_n screen_height (lambda () (generate_n screen_width (lambda () (if (eq (mod (rand) 2) 0) 0 1))))))
-(defvar cursor 0)
-(defvar cursor_max (mul screen_width screen_height))
+
+;; Constants
 (defvar newline 10)
 (defvar alive 48)
 (defvar dead 32)
@@ -90,13 +91,26 @@
           (compute_cell_state st (cons row next_st) nil (- screen_width 1) (- y 1))
           (compute_cell_state st next_st (cons (compute_cell st x y) row) (- x 1) y))))
 
+;; Creates the initial random state
+(defun create_start_state ()
+  (generate screen_height
+            (lambda () (generate screen_width
+                                 (lambda () (if (eq (mod (rand) 2) 0) 0 1))))))
+
 ;; The main loop, evaluates the next state and prints the current one
-(defun main_loop (state)
-  (progn (reset_cursor)
-         (write-char newline)
-         (print_state state)
-         (main_loop (compute_cell_state state nil nil (- screen_width 1) (- screen_height 1)))))
+(defun main_loop (state iter)
+  (if (eq iter iterations)
+      (exit)
+      (progn (reset_cursor)
+             (print 'iteration: iter)
+             (write-char newline)
+             (print_state state)
+             (main_loop (compute_cell_state state nil nil (- screen_width 1) (- screen_height 1)) (+ iter 1)))))
+
+;; Compile all of the functions
+(compile main_loop create_start_state compute_cell_state compute_cell get_neighbours
+         compute_cell_result get_xy wrap clear_screen reset_cursor print_state print_row)
 
 ;; Start the program
 (clear_screen)
-(main_loop state)
+(main_loop (create_start_state) 0)

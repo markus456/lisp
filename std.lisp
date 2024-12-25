@@ -130,3 +130,9 @@
 ;; Writes a list of numbers in base ten (i.e. pretty-printed) to stdout
 (defun write-number (n)
   (if (< n 10) (write-char (+ n 48)) (progn (write-number (div n 10)) (write-char (+ (mod n 10) 48)))))
+
+;; Compile all of the declared functions. This prevents the implementations and
+;; builtins used by them from being overridden by the calling code.
+(compile not and or xor mul_impl mul largest-doubling_impl largest-doubling
+         div_impl div pow_impl pow mod_impl mod length append mapcar nth
+         fill fill_impl generate generate_impl loop write-list write-number)
