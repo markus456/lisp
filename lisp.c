@@ -919,8 +919,11 @@ Object* eval_cell(Object* scope, Object* obj)
 Object* eval(Object* scope, Object* obj)
 {
     assert(obj);
-    Object* ret = Nil;
+    Object* ret;
+
+#ifndef NDEBUG
     PUSH2(scope, obj);
+#endif
 
     if (is_stack_trace)
     {
@@ -949,12 +952,9 @@ Object* eval(Object* scope, Object* obj)
         ret = symbol_lookup(scope, obj);
         break;
 
-    case TYPE_CELL:
-        ret = eval_cell(scope, obj);
-        break;
-
     default:
-        assert(!true);
+        assert(obj->type == TYPE_CELL);
+        ret = eval_cell(scope, obj);
         break;
     }
 
@@ -967,7 +967,9 @@ Object* eval(Object* scope, Object* obj)
         print(ret);
     }
 
+#ifndef NDEBUG
     POP();
+#endif
     return ret;
 }
 
