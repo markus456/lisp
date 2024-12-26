@@ -3,5 +3,5 @@
 for testcase in tests/*.lisp
 do
     echo "Test: $testcase"
-	./lisp -ge < "$testcase" || break
+	./lisp -e < "$testcase" || break
 done
