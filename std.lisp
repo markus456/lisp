@@ -1,5 +1,7 @@
-;; "Standard" library functions from various lisp implementations
-
+;;
+;; "Standard" library: functions from various lisp implementations as well as
+;; other bits and pieces.
+;;
 
 ;;
 ;; Logical functions
@@ -37,27 +39,27 @@
       (mul_impl a b 0)))
 
 ;; Helper for the largest_doubling function
-(defun largest_doubling_impl (a b acc)
+(defun largest-doubling_impl (a b acc)
    (if (< a (+ b b))
       (cons b acc)
-      (largest_doubling_impl a (+ b b) (+ acc acc))))
+      (largest-doubling_impl a (+ b b) (+ acc acc))))
 
 ;; Returns a cons cell with the largest multiple of b that is less than or equal
 ;; to a. The value itself is in car and the multiplier is in cdr.
-(defun largest_doubling (a b)
+(defun largest-doubling (a b)
   (if (< a b)
       (cons b 0)
-      (largest_doubling_impl a b 1)))
+      (largest-doubling_impl a b 1)))
 
 ;; Helper for the div function, uses an accumulator argument
 (defun div_impl (a b acc ld)
   (if (< a b)
       acc
-      (div_impl (- a (car ld)) b (+ acc (cdr ld)) (largest_doubling (- a (car ld)) b))))
+      (div_impl (- a (car ld)) b (+ acc (cdr ld)) (largest-doubling (- a (car ld)) b))))
 
 ;; Division of two numbers, very naive implementation
 (defun div (a b)
-  (div_impl a b 0 (largest_doubling a b)))
+  (div_impl a b 0 (largest-doubling a b)))
 
 ;; Helper for the pow function
 (defun pow_impl (a b acc)
@@ -102,14 +104,14 @@
 (defun nth (a n) (if (< n 1) (car a) (nth (cdr a) (- n 1))))
 
 ;; Fill a list with values
-(defun fill_n (n v) (n v nil))
-(defun fill_n_impl (n v acc)
-  (if (< n 1) acc (fill_n_impl (- n 1) v (cons v acc))))
+(defun fill (n v) (n v nil))
+(defun fill_impl (n v acc)
+  (if (< n 1) acc (fill_impl (- n 1) v (cons v acc))))
 
 ;; Generate a list of values by repeatedly calling a function
-(defun generate_n (n v) (generate_n_impl n v nil))
-(defun generate_n_impl (n v acc)
-  (if (< n 1) acc (generate_n_impl (- n 1) v (cons (v) acc))))
+(defun generate (n v) (generate_impl n v nil))
+(defun generate_impl (n v acc)
+  (if (< n 1) acc (generate_impl (- n 1) v (cons (v) acc))))
 
 ;;
 ;; Utility functions
