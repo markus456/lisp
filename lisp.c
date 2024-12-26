@@ -397,18 +397,6 @@ void bind_value(Object* scope, Object* symbol, Object* value)
         print(value);
     }
 
-    for (Object* o = scope->car; o != Nil; o = o->cdr)
-    {
-        assert(o->type == TYPE_CELL);
-
-        if (o->car->car == symbol)
-        {
-            o->car->cdr = value;
-            return;
-        }
-    }
-
-
     Object* bound = Nil;
     PUSH4(scope, symbol, value, bound);
     bound = cons(symbol, value);
