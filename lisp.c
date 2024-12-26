@@ -121,7 +121,7 @@ bool quiet = false;
 int debug_step = 0;
 int debug_depth = 0;
 size_t memory_size = 1024 * 1024;
-double memory_pct = 90.0;
+double memory_pct = 75.0;
 
 void debug(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
 void print(Object* obj);
