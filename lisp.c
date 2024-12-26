@@ -70,6 +70,7 @@ struct Object
 };
 
 #define MAX_VARS 7
+#define ALLOC_ALIGN sizeof(Object)
 
 struct Frame
 {
@@ -223,7 +224,7 @@ void collect_garbage()
         old_root = mem_root;
         memory_size *= 2;
         space_size = memory_size / 2;
-        mem_root = malloc(memory_size);
+        mem_root = aligned_alloc(ALLOC_ALIGN, memory_size);
         mem_ptr = mem_root;
         mem_end = mem_root + memory_size / 2;
     }
@@ -1854,7 +1855,7 @@ int main(int argc, char** argv)
     }
 
     memory_size = ((memory_size / sizeof(Object)) + 1) * sizeof(Object);
-    mem_root = malloc(memory_size);
+    mem_root = aligned_alloc(ALLOC_ALIGN, memory_size);
     mem_ptr = mem_root;
     mem_end = mem_root + memory_size / 2;
 
