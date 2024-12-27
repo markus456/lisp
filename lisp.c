@@ -2,6 +2,7 @@
 #include <getopt.h>
 #include <string.h>
 #include <stdarg.h>
+#include <stddef.h>
 #include <stdlib.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -12,7 +13,7 @@
 #include <errno.h>
 #include <time.h>
 
-#define MAX_SYMBOL_LEN 55
+#define MAX_SYMBOL_LEN 1024
 
 #define ALWAYS_GC 0
 
@@ -45,7 +46,7 @@ struct Object
         };
 
         // Symbol
-        char name[MAX_SYMBOL_LEN + 1];
+        char name[1];
 
         // Builtin function
         Function fn;
@@ -70,7 +71,9 @@ struct Object
 };
 
 #define MAX_VARS 7
-#define ALLOC_ALIGN sizeof(Object)
+#define ALLOC_ALIGN _Alignof(Object)
+
+#define BASE_SIZE offsetof(Object, number)
 
 struct Frame
 {
@@ -162,6 +165,51 @@ void debug(const char* fmt, ...)
 }
 #endif
 
+// Memory allocation and object sizes
+
+size_t allocation_size(size_t size)
+{
+    size = ((size + ALLOC_ALIGN - 1) / ALLOC_ALIGN) * ALLOC_ALIGN;
+    // All objects must be able to hold the "moved" pointer value and thus the
+    // minimum allocation size is 16 bytes, assuming 8 bytes for the pointer and
+    // the 8 bytes that the alignment of the union requires.
+    const size_t min_size = BASE_SIZE + sizeof(Object*);
+    return size > min_size ? size : min_size;
+}
+
+size_t type_size(enum ObjectType type)
+{
+    switch (type)
+    {
+    case TYPE_NUMBER:
+        return allocation_size(BASE_SIZE + sizeof(int64_t));
+    case TYPE_SYMBOL:
+        // The actual size of the symbol is determined by the length of the name
+        return allocation_size(BASE_SIZE);
+    case TYPE_CELL:
+        return allocation_size(BASE_SIZE + sizeof(Object*) * 2);
+    case TYPE_FUNCTION:
+    case TYPE_MACRO:
+        return allocation_size(BASE_SIZE + sizeof(Object*) * 3 + sizeof(bool));
+    case TYPE_BUILTIN:
+        return allocation_size(BASE_SIZE + sizeof(Function));
+    case TYPE_CONST:
+    default:
+        assert(false);
+        return 0;
+    }
+}
+
+size_t object_size(Object* obj)
+{
+    if (obj->type == TYPE_SYMBOL)
+    {
+        return allocation_size(BASE_SIZE + strlen(obj->name) + 1);
+    }
+
+    return type_size(obj->type);
+}
+
 // Garbage collection
 
 Object* make_living(Object* obj)
@@ -173,11 +221,12 @@ Object* make_living(Object* obj)
     }
     else if (obj->type != TYPE_MOVED)
     {
-        assert(mem_ptr + sizeof(Object) <= mem_end);
-        memcpy(mem_ptr, obj, sizeof(Object));
+        size_t size = object_size(obj);
+        assert(mem_ptr + size <= mem_end);
+        memcpy(mem_ptr, obj, size);
         obj->type = TYPE_MOVED;
         obj->moved = (Object*)mem_ptr;
-        mem_ptr += sizeof(Object);
+        mem_ptr += size;
     }
 
     assert(obj->type == TYPE_MOVED);
@@ -256,8 +305,9 @@ void collect_garbage()
 
     while (scan_ptr < mem_ptr)
     {
-        fix_references((Object*)scan_ptr);
-        scan_ptr += sizeof(Object);
+        Object* o = (Object*)scan_ptr;
+        fix_references(o);
+        scan_ptr += object_size(o);
     }
 
     assert(scan_ptr == mem_ptr);
@@ -295,26 +345,27 @@ void collect_garbage()
 // Object creation
 Object* symbol_lookup(Object* scope, Object* sym);
 
-Object* allocate()
+Object* allocate(size_t size)
 {
 #if ALWAYS_GC
     collect_garbage();
 #endif
+    assert(allocation_size(size) == size);
 
-    if (mem_ptr + sizeof(Object) > mem_end)
+    if (mem_ptr + size > mem_end)
     {
         collect_garbage();
     }
 
     Object* rv = (Object*)mem_ptr;
-    mem_ptr += sizeof(Object);
+    mem_ptr += size;
     return rv;
 }
 
 Object* cons(Object* car, Object* cdr)
 {
     PUSH2(car, cdr);
-    Object* rv = allocate();
+    Object* rv = allocate(type_size(TYPE_CELL));
     rv->type = TYPE_CELL;
     rv->car = car;
     rv->cdr = cdr;
@@ -334,7 +385,7 @@ Object* cdr(Object* obj)
 
 Object* make_number(int64_t val)
 {
-    Object* rv = allocate();
+    Object* rv = allocate(type_size(TYPE_NUMBER));
     rv->type = TYPE_NUMBER;
     rv->number = val;
     return rv;
@@ -342,7 +393,8 @@ Object* make_number(int64_t val)
 
 Object* make_symbol(const char* name)
 {
-    Object* rv = allocate();
+    size_t sz = allocation_size(BASE_SIZE + strlen(name) + 1);
+    Object* rv = allocate(sz);
     rv->type = TYPE_SYMBOL;
     strcpy(rv->name, name);
     return rv;
@@ -350,7 +402,7 @@ Object* make_symbol(const char* name)
 
 Object* make_builtin(Function func)
 {
-    Object* rv = allocate();
+    Object* rv = allocate(type_size(TYPE_BUILTIN));
     rv->type = TYPE_BUILTIN;
     rv->fn = func;
     return rv;
@@ -359,7 +411,7 @@ Object* make_builtin(Function func)
 Object* make_function(Object* params, Object* body, Object* env)
 {
     PUSH3(params, body, env);
-    Object* rv = allocate();
+    Object* rv = allocate(type_size(TYPE_FUNCTION));
     rv->type = TYPE_FUNCTION;
     rv->func_params = params;
     rv->func_body = body;
@@ -1842,7 +1894,7 @@ int main(int argc, char** argv)
         memory_pct = 1.0;
     }
 
-    memory_size = ((memory_size / sizeof(Object)) + 1) * sizeof(Object);
+    memory_size = ((memory_size + ALLOC_ALIGN - 1) / ALLOC_ALIGN) * ALLOC_ALIGN;
     mem_root = aligned_alloc(ALLOC_ALIGN, memory_size);
     mem_ptr = mem_root;
     mem_end = mem_root + memory_size / 2;
