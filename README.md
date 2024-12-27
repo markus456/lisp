@@ -23,6 +23,8 @@ make release
 - Tail recursion is supported for both branches of the `if` function and
   the last argument of the `progn` function.
 
+- Symbols must be less than 1024 characters long.
+
 ### Special Forms (builtin functions)
 
 - `+`: Adds all the arguments together.
