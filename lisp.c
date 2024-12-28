@@ -56,7 +56,7 @@ struct Object
             Object* func_params;
             Object* func_body;
             Object* func_env;
-            bool    compiled;
+            uint8_t compiled;
         };
 
         // The "301 Moved Permanently" pointer that's set during GC
@@ -74,6 +74,9 @@ struct Object
 #define ALLOC_ALIGN _Alignof(Object)
 
 #define BASE_SIZE offsetof(Object, number)
+
+#define COMPILE_SYMBOLS 1
+#define COMPILE_CODE    2
 
 struct Frame
 {
@@ -132,6 +135,11 @@ void print_one(Object* obj);
 
 char error_stack[16][128];
 uint8_t error_ptr = 0;
+
+bool no_error()
+{
+    return error_ptr == 0;
+}
 
 void error(const char* fmt, ...)
 {
@@ -416,7 +424,7 @@ Object* make_function(Object* params, Object* body, Object* env)
     rv->func_params = params;
     rv->func_body = body;
     rv->func_env = env;
-    rv->compiled = false;
+    rv->compiled = 0;
     POP();
     return rv;
 }
@@ -1060,7 +1068,9 @@ Object* eval(Object* scope, Object* obj)
     return ret;
 }
 
-bool compile_function(Object* scope, Object* name, Object* self, Object* params, Object* body)
+typedef bool (*CompileFunc)(Object* scope, Object* name, Object* self, Object* params, Object* body);
+
+bool resolve_symbols(Object* scope, Object* name, Object* self, Object* params, Object* body)
 {
     bool ok = true;
 
@@ -1116,7 +1126,7 @@ bool compile_function(Object* scope, Object* name, Object* self, Object* params,
         {
             if (body->car->type == TYPE_CELL)
             {
-                if (!compile_function(scope, name, self, params, body->car))
+                if (!resolve_symbols(scope, name, self, params, body->car))
                 {
                     ok = false;
                 }
@@ -1125,6 +1135,67 @@ bool compile_function(Object* scope, Object* name, Object* self, Object* params,
     }
 
     return ok;
+}
+
+bool compile_code(Object* scope, Object* name, Object* self, Object* params, Object* body)
+{
+    (void)scope;
+    (void)name;
+    (void)self;
+    (void)params;
+    (void)body;
+    return true;
+}
+
+void compile_function(Object* scope, Object* args, CompileFunc compile_func)
+{
+    Object* name = Nil;
+    Object* func = Nil;
+    PUSH4(scope, args, name, func);
+
+    for (; args->type == TYPE_CELL; args = args->cdr)
+    {
+        if (args->car->type != TYPE_SYMBOL)
+        {
+            error("Argument is not a symbol");
+        }
+        else
+        {
+            name = args->car;
+
+            if (name->type == TYPE_CELL)
+            {
+                name = eval(scope, name);
+            }
+
+            func = symbol_lookup(scope, name);
+
+            if (!func)
+            {
+                error("Undefined symbol: %s", name->name);
+            }
+            else if (func->type != TYPE_FUNCTION)
+            {
+                error("Symbol '%s' does not point to a function", name->name);
+            }
+            else
+            {
+                // Resolve all of the symbols in the function body that point to known
+                // functions or macros with the final value. This removes the need for a
+                // symbol lookup during the execution of the function.
+                if (!compile_func(scope, name, func, func->func_params, func->func_body))
+                {
+                    error("Compilation failed");
+                }
+                else
+                {
+                    func->compiled = COMPILE_SYMBOLS;
+                }
+            }
+        }
+    }
+
+    POP();
 }
 
 // Builtin operators
@@ -1603,40 +1674,11 @@ Object* builtin_defun(Object* scope, Object* args)
 
 Object* builtin_compile(Object* scope, Object* args)
 {
-    for (; args->type == TYPE_CELL; args = args->cdr)
-    {
-        if (args->car->type != TYPE_SYMBOL)
-        {
-            error("Argument is not a symbol");
-        }
-        else
-        {
-            Object* name = args->car;
-            Object* func = symbol_lookup(scope, name);
+    compile_function(scope, args, resolve_symbols);
 
-            if (!func)
-            {
-                error("Undefined symbol: %s", name->name);
-            }
-            else if (func->type != TYPE_FUNCTION)
-            {
-                error("Symbol '%s' does not point to a function", name->name);
-            }
-            else
-            {
-                // Resolve all of the symbols in the function body that point to known
-                // functions or macros with the final value. This removes the need for a
-                // symbol lookup during the execution of the function.
-                if (!compile_function(scope, name, func, func->func_params, func->func_body))
-                {
-                    error("Compilation failed");
-                }
-                else
-                {
-                    func->compiled = true;
-                }
-            }
-        }
+    if (no_error())
+    {
+        compile_function(scope, args, compile_code);
     }
 
     return Nil;
