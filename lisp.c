@@ -17,14 +17,16 @@
 
 #define ALWAYS_GC 0
 
-enum ObjectType {TYPE_CONST    = 0x01,
-                 TYPE_NUMBER   = 0x02,
-                 TYPE_SYMBOL   = 0x04,
-                 TYPE_BUILTIN  = 0x08,
-                 TYPE_CELL     = 0x10,
-                 TYPE_FUNCTION = 0x20,
-                 TYPE_MACRO    = 0x40,
-                 TYPE_MOVED    = 0x80};
+enum Type {
+    TYPE_NUMBER   = 0,
+    TYPE_SYMBOL   = 1,
+    TYPE_BUILTIN  = 2,
+    TYPE_CELL     = 3,
+    TYPE_FUNCTION = 4,
+    TYPE_MACRO    = 5,
+    TYPE_MOVED    = 6,
+    TYPE_CONST    = 7
+};
 
 struct Object;
 typedef struct Object Object;
@@ -70,6 +72,11 @@ struct Object
     };
 };
 
+int get_type(Object* obj)
+{
+    return obj->type;
+}
+
 #define MAX_VARS 7
 #define ALLOC_ALIGN _Alignof(Object)
 
@@ -111,9 +118,9 @@ Object* AllSymbols = Nil;
 Object* Env = Nil;
 
 #define CHECK0ARGS(args) args != Nil
-#define CHECK1ARGS(args) args->type != TYPE_CELL || CHECK0ARGS(args->cdr)
-#define CHECK2ARGS(args) args->type != TYPE_CELL || CHECK1ARGS(args->cdr)
-#define CHECK3ARGS(args) args->type != TYPE_CELL || CHECK2ARGS(args->cdr)
+#define CHECK1ARGS(args) get_type(args) != TYPE_CELL || CHECK0ARGS(args->cdr)
+#define CHECK2ARGS(args) get_type(args) != TYPE_CELL || CHECK1ARGS(args->cdr)
+#define CHECK3ARGS(args) get_type(args) != TYPE_CELL || CHECK2ARGS(args->cdr)
 
 FILE* input;
 uint8_t* mem_root;
@@ -185,7 +192,7 @@ size_t allocation_size(size_t size)
     return size > min_size ? size : min_size;
 }
 
-size_t type_size(enum ObjectType type)
+size_t type_size(enum Type type)
 {
     switch (type)
     {
@@ -210,24 +217,28 @@ size_t type_size(enum ObjectType type)
 
 size_t object_size(Object* obj)
 {
-    if (obj->type == TYPE_SYMBOL)
+    int type = get_type(obj);
+
+    if (type == TYPE_SYMBOL)
     {
         return allocation_size(BASE_SIZE + strlen(obj->name) + 1);
     }
 
-    return type_size(obj->type);
+    return type_size(type);
 }
 
 // Garbage collection
 
 Object* make_living(Object* obj)
 {
-    if (obj == Nil || obj == True)
+    int type = get_type(obj);
+
+    if (type == TYPE_CONST)
     {
         // Constant type
         return obj;
     }
-    else if (obj->type != TYPE_MOVED)
+    else if (type != TYPE_MOVED)
     {
         size_t size = object_size(obj);
         assert(mem_ptr + size <= mem_end);
@@ -237,13 +248,13 @@ Object* make_living(Object* obj)
         mem_ptr += size;
     }
 
-    assert(obj->type == TYPE_MOVED);
+    assert(get_type(obj) == TYPE_MOVED);
     return obj->moved;
 }
 
 void fix_references(Object* obj)
 {
-    switch (obj->type)
+    switch (get_type(obj))
     {
     case TYPE_SYMBOL:
     case TYPE_NUMBER:
@@ -383,12 +394,12 @@ Object* cons(Object* car, Object* cdr)
 
 Object* car(Object* obj)
 {
-    return obj->type == TYPE_CELL ? obj->car : Nil;
+    return get_type(obj) == TYPE_CELL ? obj->car : Nil;
 }
 
 Object* cdr(Object* obj)
 {
-    return obj->type == TYPE_CELL ? obj->cdr : Nil;
+    return get_type(obj) == TYPE_CELL ? obj->cdr : Nil;
 }
 
 Object* make_number(int64_t val)
@@ -532,7 +543,7 @@ Object* symbol_lookup(Object* scope, Object* sym)
     {
         for (Object* o = s->car; o != Nil; o = o->cdr)
         {
-            assert(o->car->type = TYPE_CELL);
+            assert(get_type(o->car) == TYPE_CELL);
 
             if (o->car->car == sym)
             {
@@ -555,7 +566,7 @@ void print_one(Object* obj)
     assert(obj);
     assert(obj != TailCall);
 
-    switch (obj->type)
+    switch (get_type(obj))
     {
     case TYPE_NUMBER:
         printf("%ld ", obj->number);
@@ -579,7 +590,7 @@ void print_one(Object* obj)
             printf("( ");
             Object* o = obj;
 
-            for (; o->type == TYPE_CELL; o = o->cdr)
+            for (; get_type(o) == TYPE_CELL; o = o->cdr)
             {
                 print_one(o->car);
             }
@@ -850,9 +861,9 @@ Object* expand_macro(Object* scope, Object* macro, Object* args)
 
     while (param != Nil && args != Nil)
     {
-        assert(param->type == TYPE_CELL);
+        assert(get_type(param) == TYPE_CELL);
 
-        if (args->type != TYPE_CELL)
+        if (get_type(args) != TYPE_CELL)
         {
             break;
         }
@@ -866,7 +877,7 @@ Object* expand_macro(Object* scope, Object* macro, Object* args)
 
     if (args != Nil)
     {
-        if (args->type == TYPE_CELL)
+        if (get_type(args) == TYPE_CELL)
         {
             error("Too many arguments to macro");
         }
@@ -901,23 +912,24 @@ Object* eval_cell(Object* scope, Object* obj)
  start:
 
     fn = eval(scope, obj->car);
+    int type = get_type(fn);
 
-    if (fn->type == TYPE_MACRO)
+    if (type == TYPE_MACRO)
     {
         ret = expand_macro(scope, fn, obj->cdr);
         ret = eval(scope, ret);
     }
-    else if (fn->type == TYPE_BUILTIN)
+    else if (type == TYPE_BUILTIN)
     {
         ret = fn->fn(scope, obj->cdr);
     }
-    else if (fn->type == TYPE_FUNCTION)
+    else if (type == TYPE_FUNCTION)
     {
         next_scope = new_scope(fn->func_env != Nil ? fn->func_env : scope);
         param = fn->func_params;
         arg = obj->cdr;
-        assert(param == Nil || param->type == TYPE_CELL);
-        assert(arg == Nil || arg->type == TYPE_CELL);
+        assert(param == Nil || get_type(param) == TYPE_CELL);
+        assert(arg == Nil || get_type(arg) == TYPE_CELL);
 
         while (param != Nil && arg != Nil)
         {
@@ -930,18 +942,18 @@ Object* eval_cell(Object* scope, Object* obj)
         if (param != Nil)
         {
             error("Not enough arguments to function '%s'. Expected %d, have %d.",
-                  obj->car->type == TYPE_SYMBOL ? obj->car->name : "<func>",
+                  get_type(obj->car) == TYPE_SYMBOL ? obj->car->name : "<func>",
                   length(fn->func_params), length(obj->cdr));
         }
         else if (arg != Nil)
         {
             error("Too many arguments to function '%s'. Expected %d, have %d.",
-                  obj->car->type == TYPE_SYMBOL ? obj->car->name : "<func>",
+                  get_type(obj->car) == TYPE_SYMBOL ? obj->car->name : "<func>",
                   length(fn->func_params), length(obj->cdr));
         }
         else
         {
-            if (fn->func_body->type == TYPE_CELL)
+            if (get_type(fn->func_body) == TYPE_CELL)
             {
                 debug("Function body is a list, evaluating in the same frame:");
                 obj = fn->func_body;
@@ -970,7 +982,7 @@ Object* eval_cell(Object* scope, Object* obj)
         scope = ret->tail_scope;
         ret = Nil;
 
-        if (obj->type == TYPE_CELL)
+        if (get_type(obj) == TYPE_CELL)
         {
             if (is_stack_trace)
             {
@@ -1021,7 +1033,7 @@ Object* eval(Object* scope, Object* obj)
         ++debug_depth;
     }
 
-    switch (obj->type)
+    switch (get_type(obj))
     {
     case TYPE_CONST:
     case TYPE_NUMBER:
@@ -1048,7 +1060,7 @@ Object* eval(Object* scope, Object* obj)
         break;
 
     default:
-        assert(obj->type == TYPE_CELL);
+        assert(get_type(obj) == TYPE_CELL);
         ret = eval_cell(scope, obj);
         break;
     }
@@ -1074,11 +1086,11 @@ bool resolve_symbols(Object* scope, Object* name, Object* self, Object* params, 
 {
     bool ok = true;
 
-    if (body->type == TYPE_CELL && body->car->type == TYPE_SYMBOL)
+    if (get_type(body) == TYPE_CELL && get_type(body->car) == TYPE_SYMBOL)
     {
         bool is_param = false;
 
-        for (Object* p = params; p->type == TYPE_CELL; p = p->cdr)
+        for (Object* p = params; get_type(p) == TYPE_CELL; p = p->cdr)
         {
             if (p->car == body->car)
             {
@@ -1105,26 +1117,31 @@ bool resolve_symbols(Object* scope, Object* name, Object* self, Object* params, 
                 error("Undefined symbol: %s", body->car->name);
                 ok = false;
             }
-            else if (val->type == TYPE_BUILTIN || val->type == TYPE_FUNCTION || val->type == TYPE_MACRO)
+            else
             {
-                debug("Symbol '%s' is a special form, function or macro.", body->car->name);
-                Object* global_val = symbol_lookup(Env, body->car);
+                int type = get_type(val);
 
-                if (val != global_val)
+                if (type == TYPE_BUILTIN || type == TYPE_FUNCTION || type == TYPE_MACRO)
                 {
-                    debug("Symbol '%s' does not come from the global scope.", body->car->name);
-                }
-                else
-                {
-                    debug("Symbol '%s' is from the global scope, resolving immediately.", body->car->name);
-                    body->car = val;
+                    debug("Symbol '%s' is a special form, function or macro.", body->car->name);
+                    Object* global_val = symbol_lookup(Env, body->car);
+
+                    if (val != global_val)
+                    {
+                        debug("Symbol '%s' does not come from the global scope.", body->car->name);
+                    }
+                    else
+                    {
+                        debug("Symbol '%s' is from the global scope, resolving immediately.", body->car->name);
+                        body->car = val;
+                    }
                 }
             }
         }
 
-        for (body = body->cdr; body->type == TYPE_CELL; body = body->cdr)
+        for (body = body->cdr; get_type(body) == TYPE_CELL; body = body->cdr)
         {
-            if (body->car->type == TYPE_CELL)
+            if (get_type(body->car) == TYPE_CELL)
             {
                 if (!resolve_symbols(scope, name, self, params, body->car))
                 {
@@ -1153,9 +1170,9 @@ void compile_function(Object* scope, Object* args, CompileFunc compile_func)
     Object* func = Nil;
     PUSH4(scope, args, name, func);
 
-    for (; args->type == TYPE_CELL; args = args->cdr)
+    for (; get_type(args) == TYPE_CELL; args = args->cdr)
     {
-        if (args->car->type != TYPE_SYMBOL)
+        if (get_type(args->car) != TYPE_SYMBOL)
         {
             error("Argument is not a symbol");
         }
@@ -1163,7 +1180,7 @@ void compile_function(Object* scope, Object* args, CompileFunc compile_func)
         {
             name = args->car;
 
-            if (name->type == TYPE_CELL)
+            if (get_type(name) == TYPE_CELL)
             {
                 name = eval(scope, name);
             }
@@ -1174,7 +1191,7 @@ void compile_function(Object* scope, Object* args, CompileFunc compile_func)
             {
                 error("Undefined symbol: %s", name->name);
             }
-            else if (func->type != TYPE_FUNCTION)
+            else if (get_type(func) != TYPE_FUNCTION)
             {
                 error("Symbol '%s' does not point to a function", name->name);
             }
@@ -1215,7 +1232,7 @@ Object* builtin_add(Object* scope, Object* args)
     {
         Object* o = eval(scope, args->car);
 
-        if (o->type != TYPE_NUMBER)
+        if (get_type(o) != TYPE_NUMBER)
         {
             error("Not a number");
             POP();
@@ -1242,7 +1259,7 @@ Object* builtin_sub(Object* scope, Object* args)
 
     Object* o = eval(scope, args->car);
 
-    if (o->type != TYPE_NUMBER)
+    if (get_type(o) != TYPE_NUMBER)
     {
         error("Not a number");
         return Nil;
@@ -1261,7 +1278,7 @@ Object* builtin_sub(Object* scope, Object* args)
         {
             o = eval(scope, args->car);
 
-            if (o->type != TYPE_NUMBER)
+            if (get_type(o) != TYPE_NUMBER)
             {
                 error("Not a number");
                 return Nil;
@@ -1291,7 +1308,7 @@ Object* builtin_less(Object* scope, Object* args)
     rhs = eval(scope, args->cdr->car);
     Object* ret = Nil;
 
-    if (lhs->type == TYPE_NUMBER && rhs->type == TYPE_NUMBER && lhs->number < rhs->number)
+    if (get_type(lhs) == TYPE_NUMBER && get_type(rhs) == TYPE_NUMBER && lhs->number < rhs->number)
     {
         ret = True;
     }
@@ -1359,7 +1376,7 @@ Object* builtin_apply(Object* scope, Object* args)
     func = eval(scope, args->car);
     func_args = eval(scope, args->cdr->car);
 
-    if (func_args != Nil && func_args->type != TYPE_CELL)
+    if (func_args != Nil && get_type(func_args) != TYPE_CELL)
     {
         error("Arguments for apply are not a list");
         POP();
@@ -1397,12 +1414,12 @@ Object* builtin_writechar(Object* scope, Object* args)
     {
         Object* obj = eval(scope, args->car);
 
-        if (obj->type == TYPE_NUMBER)
+        if (get_type(obj) == TYPE_NUMBER)
         {
             unsigned char ch = obj->number;
             fwrite(&ch, 1, 1, stdout);
         }
-        else if (obj->type == TYPE_SYMBOL)
+        else if (get_type(obj) == TYPE_SYMBOL)
         {
             fwrite(obj->name, strlen(obj->name), 1, stdout);
         }
@@ -1451,7 +1468,7 @@ Object* builtin_car(Object* scope, Object* args)
 
     args = eval(scope, args->car);
 
-    if (args->type != TYPE_CELL)
+    if (get_type(args) != TYPE_CELL)
     {
         error("Evaluation did not produce a list");
         return Nil;
@@ -1470,7 +1487,7 @@ Object* builtin_cdr(Object* scope, Object* args)
 
     args = eval(scope, args->car);
 
-    if (args->type != TYPE_CELL)
+    if (get_type(args) != TYPE_CELL)
     {
         error("Evaluation did not produce a list");
         return Nil;
@@ -1491,7 +1508,7 @@ Object* builtin_eq(Object* scope, Object* args)
     Object* lhs = eval(scope, args->car);
     Object* rhs = eval(scope, args->cdr->car);
 
-    if (lhs->type != rhs->type)
+    if (get_type(lhs) != get_type(rhs))
     {
         POP();
         return Nil;
@@ -1499,7 +1516,7 @@ Object* builtin_eq(Object* scope, Object* args)
 
     Object* ret = Nil;
 
-    switch (lhs->type)
+    switch (get_type(lhs))
     {
     case TYPE_CONST:
         ret = True;
@@ -1638,7 +1655,7 @@ Object* builtin_define(Object* scope, Object* args)
 
     Object* name = args->car;
 
-    if (name->type != TYPE_SYMBOL)
+    if (get_type(name) != TYPE_SYMBOL)
     {
         error("First argument is not a symbol");
         return Nil;
@@ -1705,7 +1722,7 @@ Object* builtin_macroexpand(Object* scope, Object* args)
         return Nil;
     }
 
-    if (args->car->type != TYPE_SYMBOL)
+    if (get_type(args->car) != TYPE_SYMBOL)
     {
         error("First argument is not a symbol");
         return Nil;
@@ -1715,7 +1732,7 @@ Object* builtin_macroexpand(Object* scope, Object* args)
     Object* macro = eval(scope, args->car);
     Object* ret = Nil;
 
-    if (macro->type != TYPE_MACRO)
+    if (get_type(macro) != TYPE_MACRO)
     {
         error("%s is not a macro", args->name);
     }
@@ -1736,7 +1753,7 @@ Object* builtin_load(Object* scope, Object* args)
         return Nil;
     }
 
-    if (args->car->type != TYPE_SYMBOL)
+    if (get_type(args->car) != TYPE_SYMBOL)
     {
         error("First argument is not a symbol");
         return Nil;
