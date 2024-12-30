@@ -1,137 +1,71 @@
-#include <unistd.h>
-#include <getopt.h>
-#include <string.h>
-#include <stdarg.h>
-#include <stddef.h>
-#include <stdlib.h>
-#include <stdbool.h>
-#include <stdio.h>
-#include <stdint.h>
-#include <assert.h>
-#include <ctype.h>
-#include <limits.h>
-#include <errno.h>
-#include <time.h>
+#include "lisp.h"
 
 #define MAX_SYMBOL_LEN 1024
 
 #define ALWAYS_GC 0
 
-enum Type {
-    TYPE_NUMBER   = 0,
-    TYPE_SYMBOL   = 1,
-    TYPE_BUILTIN  = 2,
-    TYPE_CELL     = 3,
-    TYPE_FUNCTION = 4,
-    TYPE_MACRO    = 5,
-    TYPE_MOVED    = 6,
-    TYPE_CONST    = 7
-};
-
-struct Object;
-typedef struct Object Object;
-typedef struct Object* (*Function) (struct Object*, struct Object*);
-
-struct Object
-{
-    uint8_t type;
-
-    union
-    {
-        // Number
-        int64_t number;
-
-        // Cons cell
-        struct {
-            Object* car;
-            Object* cdr;
-        };
-
-        // Symbol
-        char name[1];
-
-        // Builtin function
-        Function fn;
-
-        // Custom functions
-        struct {
-            Object* func_params;
-            Object* func_body;
-            Object* func_env;
-            uint8_t compiled;
-        };
-
-        // The "301 Moved Permanently" pointer that's set during GC
-        Object* moved;
-
-        // The special value where the return value is stashed for tail calls
-        struct {
-            Object* tail_expr;
-            Object* tail_scope;
-        };
-    };
-};
+Frame* stack_top = NULL;
 
 int get_type(Object* obj)
 {
-    return obj->type;
+    uint8_t type = (intptr_t)obj & TYPE_MASK;
+    return (type & 0x3) == 0 ? TYPE_NUMBER : type;
 }
-
-#define MAX_VARS 7
-#define ALLOC_ALIGN _Alignof(Object)
-
-#define BASE_SIZE offsetof(Object, number)
-
-#define COMPILE_SYMBOLS 1
-#define COMPILE_CODE    2
-
-struct Frame
-{
-    struct Frame* next;
-    int size;
-    Object** vars[MAX_VARS];
-};
-
-typedef struct Frame Frame;
-Frame* stack_top = NULL;
 
 Object* get_obj(Object* obj)
 {
-    return obj;
+    intptr_t p = (intptr_t)obj;
+    return (Object*)(p & ~TYPE_MASK);
+}
+
+Object* get_cell(Object* obj)
+{
+    assert(get_type(obj) == TYPE_CELL);
+    intptr_t p = (intptr_t)obj;
+    return (Object*)(p - TYPE_CELL);
+}
+
+Object* get_func(Object* obj)
+{
+    assert(get_type(obj) == TYPE_FUNCTION);
+    intptr_t p = (intptr_t)obj;
+    return (Object*)(p - TYPE_FUNCTION);
+}
+
+Object* get_builtin(Object* obj)
+{
+    assert(get_type(obj) == TYPE_BUILTIN);
+    intptr_t p = (intptr_t)obj;
+    return (Object*)(p - TYPE_BUILTIN);
+}
+
+int get_stored_type(Object* obj)
+{
+    return (intptr_t)get_obj(obj)->moved & TYPE_MASK;
 }
 
 const char* get_symbol(Object* obj)
 {
-    return obj->name;
+    return get_obj(obj)->name;
 }
 
-#define ENTER() Frame frame; frame.next = stack_top; frame.size = 0; stack_top = &frame
-#define SETEND(n) frame.size = n
-#define PUSH1(a) ENTER(); frame.vars[0] = &a; SETEND(1)
-#define PUSH2(a, b) PUSH1(a); frame.vars[1] = &b; SETEND(2)
-#define PUSH3(a, b, c) PUSH2(a, b); frame.vars[2] = &c; SETEND(3)
-#define PUSH4(a, b, c, d) PUSH3(a, b, c); frame.vars[3] = &d; SETEND(4)
-#define PUSH5(a, b, c, d, e) PUSH4(a, b, c, d); frame.vars[4] = &e; SETEND(5)
-#define PUSH6(a, b, c, d, e, f) PUSH5(a, b, c, d, e); frame.vars[5] = &f; SETEND(6)
-#define PUSH7(a, b, c, d, e, f, g) PUSH6(a, b, c, d, e, f); frame.vars[6] = &g; SETEND(7)
-#define POP() stack_top = frame.next;
+Object* make_ptr(Object* obj, enum Type type)
+{
+    intptr_t p = (intptr_t)obj;
+    return (Object*)(p | type);
+}
 
-Object Nil_obj = {.type = TYPE_CONST, .number = 0};
-#define Nil (&Nil_obj)
-
-Object True_obj = {.type = TYPE_CONST, .number = 0};
-#define True (&True_obj)
-
-Object TailCall_obj = {.type = TYPE_CONST, .number = 0};
+// The special return value from some of the functions that indicates that the
+// return value should be evaluated in the same stack frame.
+Object TailCall_obj = {0};
 #define TailCall (&TailCall_obj)
 
 Object* AllSymbols = Nil;
 Object* Env = Nil;
 
-#define CHECK0ARGS(args) args != Nil
-#define CHECK1ARGS(args) get_type(args) != TYPE_CELL || CHECK0ARGS(cdr(args))
-#define CHECK2ARGS(args) get_type(args) != TYPE_CELL || CHECK1ARGS(cdr(args))
-#define CHECK3ARGS(args) get_type(args) != TYPE_CELL || CHECK2ARGS(cdr(args))
+//
+// Globals
+//
 
 FILE* input;
 uint8_t* mem_root;
@@ -147,7 +81,6 @@ int debug_depth = 0;
 size_t memory_size = 1024 * 1024;
 double memory_pct = 75.0;
 
-void debug(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
 void print(Object* obj);
 void print_one(Object* obj);
 
@@ -207,8 +140,6 @@ size_t type_size(enum Type type)
 {
     switch (type)
     {
-    case TYPE_NUMBER:
-        return allocation_size(BASE_SIZE + sizeof(int64_t));
     case TYPE_SYMBOL:
         // The actual size of the symbol is determined by the length of the name
         return allocation_size(BASE_SIZE);
@@ -219,6 +150,7 @@ size_t type_size(enum Type type)
         return allocation_size(BASE_SIZE + sizeof(Object*) * 3 + sizeof(bool));
     case TYPE_BUILTIN:
         return allocation_size(BASE_SIZE + sizeof(Function));
+    case TYPE_NUMBER:
     case TYPE_CONST:
     default:
         assert(false);
@@ -228,7 +160,7 @@ size_t type_size(enum Type type)
 
 size_t object_size(Object* obj)
 {
-    int type = get_type(obj);
+    int type = get_stored_type(obj);
 
     if (type == TYPE_SYMBOL)
     {
@@ -244,31 +176,43 @@ Object* make_living(Object* obj)
 {
     int type = get_type(obj);
 
-    if (type == TYPE_CONST)
+    if (type == TYPE_CONST || type == TYPE_NUMBER)
     {
         // Constant type
         return obj;
     }
-    else if (type != TYPE_MOVED)
+
+    Object* ptr = get_obj(obj);
+
+    // The moved pointer is set to the "moved to" address which has 8 byte
+    // alignment. If any of the lowest bits are set, the object has not yet been
+    // moved. In this case get_stored_type will return a non-zero value.
+    if (get_stored_type(ptr))
     {
-        size_t size = object_size(obj);
+        size_t size = object_size(ptr);
         assert(mem_ptr + size <= mem_end);
-        memcpy(mem_ptr, obj, size);
-        obj->type = TYPE_MOVED;
-        obj->moved = (Object*)mem_ptr;
+        memcpy(mem_ptr, ptr, size);
+        assert(((intptr_t)mem_ptr & TYPE_MASK) == 0);
+        assert(((intptr_t)((Object*)mem_ptr)->moved & TYPE_MASK) == type);
+        ptr->moved = (Object*)mem_ptr;
         mem_ptr += size;
     }
 
-    assert(get_type(obj) == TYPE_MOVED);
-    return obj->moved;
+    assert(ptr->moved);
+    return make_ptr(ptr->moved, type);
 }
 
 void fix_references(Object* obj)
 {
-    switch (get_type(obj))
+    // The type information is also included in the object header. Otherwise it
+    // would not be possible to know the type of the object when the heap memory is
+    // scanned during garbage collection.
+    assert(get_obj(obj) == obj);
+    int type = get_stored_type(obj);
+
+    switch (type)
     {
     case TYPE_SYMBOL:
-    case TYPE_NUMBER:
     case TYPE_BUILTIN:
         break;
 
@@ -284,8 +228,8 @@ void fix_references(Object* obj)
         obj->func_env = make_living(obj->func_env);
         break;
 
+    case TYPE_NUMBER:
     case TYPE_CONST:
-    case TYPE_MOVED:
     default:
         assert(!true);
         break;
@@ -373,7 +317,6 @@ void collect_garbage()
 }
 
 // Object creation
-Object* symbol_lookup(Object* scope, Object* sym);
 
 Object* allocate(size_t size)
 {
@@ -398,79 +341,83 @@ Object* cons(Object* car, Object* cdr)
 {
     PUSH2(car, cdr);
     Object* rv = allocate(type_size(TYPE_CELL));
-    rv->type = TYPE_CELL;
+    rv->moved = (Object*)TYPE_CELL;
     rv->car = car;
     rv->cdr = cdr;
     POP();
-    return rv;
+    return make_ptr(rv, TYPE_CELL);
 }
 
 Object* car(Object* obj)
 {
     assert(get_type(obj) == TYPE_CELL);
-    return get_obj(obj)->car;
+    return get_cell(obj)->car;
 }
 
 Object* cdr(Object* obj)
 {
     assert(get_type(obj) == TYPE_CELL);
-    return get_obj(obj)->cdr;
+    return get_cell(obj)->cdr;
 }
 
 Object* make_number(int64_t val)
 {
-    Object* rv = allocate(type_size(TYPE_NUMBER));
-    rv->type = TYPE_NUMBER;
-    rv->number = val;
-    return rv;
+    return (Object*)((uint64_t)val << 2);
+}
+
+int64_t get_number(Object* obj)
+{
+    assert(get_type(obj) == TYPE_NUMBER);
+    int64_t val = (int64_t)obj;
+    return val >> 2;
 }
 
 Object* make_symbol(const char* name)
 {
     size_t sz = allocation_size(BASE_SIZE + strlen(name) + 1);
     Object* rv = allocate(sz);
-    rv->type = TYPE_SYMBOL;
+    rv->moved = (Object*)TYPE_SYMBOL;
     strcpy(rv->name, name);
-    return rv;
+    return make_ptr(rv, TYPE_SYMBOL);
 }
 
 Object* make_builtin(Function func)
 {
     Object* rv = allocate(type_size(TYPE_BUILTIN));
-    rv->type = TYPE_BUILTIN;
+    rv->moved = (Object*)TYPE_BUILTIN;
     rv->fn = func;
-    return rv;
+    return make_ptr(rv, TYPE_BUILTIN);
 }
 
 Object* make_function(Object* params, Object* body, Object* env)
 {
     PUSH3(params, body, env);
     Object* rv = allocate(type_size(TYPE_FUNCTION));
-    rv->type = TYPE_FUNCTION;
+    rv->moved = (Object*)TYPE_FUNCTION;
     rv->func_params = params;
     rv->func_body = body;
     rv->func_env = env;
     rv->compiled = 0;
     POP();
-    return rv;
+    return make_ptr(rv, TYPE_FUNCTION);
 }
 
 Object* func_body(Object* obj)
 {
     assert(get_type(obj) == TYPE_FUNCTION || get_type(obj) == TYPE_MACRO);
-    return get_obj(obj)->func_body;
+    return get_func(obj)->func_body;
 }
 
 Object* func_params(Object* obj)
 {
     assert(get_type(obj) == TYPE_FUNCTION || get_type(obj) == TYPE_MACRO);
-    return get_obj(obj)->func_params;
+    return get_func(obj)->func_params;
 }
 
 Object* func_env(Object* obj)
 {
     assert(get_type(obj) == TYPE_FUNCTION || get_type(obj) == TYPE_MACRO);
-    return get_obj(obj)->func_env;
+    return get_func(obj)->func_env;
 }
 
 Object* new_scope(Object* prev_scope)
@@ -507,7 +454,7 @@ void bind_value(Object* scope, Object* symbol, Object* value)
     PUSH4(scope, symbol, value, bound);
     bound = cons(symbol, value);
     Object* res = cons(bound, car(scope));
-    get_obj(scope)->car = res;
+    get_cell(scope)->car = res;
     POP();
 }
 
@@ -595,18 +542,17 @@ Object* symbol_lookup(Object* scope, Object* sym)
         }
     }
 
-    return NULL;
+    return Undefined;
 }
 
 void print_one(Object* obj)
 {
-    assert(obj);
     assert(obj != TailCall);
 
     switch (get_type(obj))
     {
     case TYPE_NUMBER:
-        printf("%ld ", obj->number);
+        printf("%ld ", get_number(obj));
         break;
     case TYPE_SYMBOL:
         printf("%s ", get_symbol(obj));
@@ -641,7 +587,7 @@ void print_one(Object* obj)
         }
         break;
     case TYPE_FUNCTION:
-        if (get_obj(obj)->compiled)
+        if (get_func(obj)->compiled)
         {
             printf("<compiled func> ");
         }
@@ -702,7 +648,7 @@ Object* reverse(Object* list)
     while (list != Nil)
     {
         Object* next = cdr(list);
-        get_obj(list)->cdr = newlist;
+        get_cell(list)->cdr = newlist;
         newlist = list;
         list = next;
     }
@@ -733,7 +679,7 @@ Object* parse_list()
     get();
     obj = parse_expr();
 
-    while (obj)
+    while (obj != Undefined)
     {
         value = cons(obj, value);
         obj = parse_expr();
@@ -753,7 +699,7 @@ Object* parse_number()
         ch = get();
         val = ch - '0' + val * 10;
 
-        if (val >= LONG_MAX)
+        if (val >= LONG_MAX >> 2)
         {
             error("Integer overflow");
             return Nil;
@@ -792,7 +738,7 @@ Object* parse_symbol()
         if (ptr == name + MAX_SYMBOL_LEN)
         {
             error("Symbol name too long");
-            return NULL;
+            return Undefined;
         }
     }
 
@@ -853,7 +799,12 @@ Object* parse_expr()
                 if (isdigit(peek()))
                 {
                     o = parse_number();
-                    o->number = -o->number;
+
+                    if (o != Nil)
+                    {
+                        int64_t val = get_number(o);
+                        o = make_number(-val);
+                    }
                 }
                 else if (isspace(peek()))
                 {
@@ -862,8 +813,9 @@ Object* parse_expr()
                 else
                 {
                     o = parse_symbol();
-                    memmove(o->name + 1, o->name, strlen(o->name));
-                    o->name[0] = '-';
+                    char* name = (char*)get_symbol(o);
+                    memmove(name + 1, name, strlen(name));
+                    name[0] = '-';
                 }
 
                 return o;
@@ -874,21 +826,19 @@ Object* parse_expr()
 
         case ')':
             get();
-            return NULL;
+            return Undefined;
 
         case EOF:
-            return NULL;
+            return Undefined;
 
         default:
             return parse_symbol();
         };
     }
 
-    return NULL;
+    return Undefined;
 }
 // Evaluation
-
-Object* eval(Object* scope, Object* obj);
 
 Object* expand_macro(Object* scope, Object* macro, Object* args)
 {
@@ -958,7 +908,7 @@ Object* eval_cell(Object* scope, Object* obj)
     }
     else if (type == TYPE_BUILTIN)
     {
-        ret = get_obj(fn)->fn(scope, cdr(obj));
+        ret = get_builtin(fn)->fn(scope, cdr(obj));
     }
     else if (type == TYPE_FUNCTION)
     {
@@ -1020,8 +970,8 @@ Object* eval_cell(Object* scope, Object* obj)
 
     if (ret == TailCall)
     {
-        obj = get_obj(ret)->tail_expr;
-        scope = get_obj(ret)->tail_scope;
+        obj = ret->tail_expr;
+        scope = ret->tail_scope;
         ret = Nil;
 
         if (get_type(obj) == TYPE_CELL)
@@ -1055,7 +1005,6 @@ Object* eval_cell(Object* scope, Object* obj)
 
 Object* eval(Object* scope, Object* obj)
 {
-    assert(obj);
     Object* ret;
 
 #ifndef NDEBUG
@@ -1088,7 +1037,7 @@ Object* eval(Object* scope, Object* obj)
     case TYPE_SYMBOL:
         ret = symbol_lookup(scope, obj);
 
-        if (!ret)
+        if (ret == Undefined)
         {
             ret = Nil;
             error("Undefined symbol: %s", get_symbol(obj));
@@ -1155,7 +1104,7 @@ bool resolve_symbols(Object* scope, Object* name, Object* self, Object* params, 
         {
             Object* val = symbol_lookup(scope, sym);
 
-            if (!val)
+            if (val == Undefined)
             {
                 error("Undefined symbol: %s", get_symbol(sym));
                 ok = false;
@@ -1230,7 +1179,7 @@ void compile_function(Object* scope, Object* args, CompileFunc compile_func)
 
             func = symbol_lookup(scope, name);
 
-            if (!func)
+            if (func == Undefined)
             {
                 error("Undefined symbol: %s", get_symbol(name));
             }
@@ -1249,7 +1198,7 @@ void compile_function(Object* scope, Object* args, CompileFunc compile_func)
                 }
                 else
                 {
-                    get_obj(func)->compiled = COMPILE_SYMBOLS;
+                    get_obj(func)->compiled = 1;
                 }
             }
         }
@@ -1282,7 +1231,7 @@ Object* builtin_add(Object* scope, Object* args)
             return Nil;
         }
 
-        sum += o->number;
+        sum += get_number(o);
     }
 
     POP();
@@ -1308,7 +1257,7 @@ Object* builtin_sub(Object* scope, Object* args)
         return Nil;
     }
 
-    sum = o->number;
+    sum = get_number(o);
     args = cdr(args);
 
     if (args == Nil)
@@ -1327,7 +1276,7 @@ Object* builtin_sub(Object* scope, Object* args)
                 return Nil;
             }
 
-            sum -= o->number;
+            sum -= get_number(o);
         }
     }
 
@@ -1349,15 +1298,10 @@ Object* builtin_less(Object* scope, Object* args)
 
     lhs = eval(scope, car(args));
     rhs = eval(scope, car(cdr(args)));
-    Object* ret = Nil;
-
-    if (get_type(lhs) == TYPE_NUMBER && get_type(rhs) == TYPE_NUMBER && lhs->number < rhs->number)
-    {
-        ret = True;
-    }
 
     POP();
-    return ret;
+    return get_number(lhs) < get_number(rhs) ? True : Nil;
+
 }
 
 Object* builtin_quote(Object*, Object* args)
@@ -1459,7 +1403,7 @@ Object* builtin_writechar(Object* scope, Object* args)
 
         if (get_type(obj) == TYPE_NUMBER)
         {
-            unsigned char ch = obj->number;
+            unsigned char ch = get_number(obj);
             fwrite(&ch, 1, 1, stdout);
         }
         else if (get_type(obj) == TYPE_SYMBOL)
@@ -1549,51 +1493,16 @@ Object* builtin_eq(Object* scope, Object* args)
     }
 
     PUSH2(scope, args);
-    Object* lhs = eval(scope, args->car);
-    Object* rhs = eval(scope, args->cdr->car);
-
-    if (get_type(lhs) != get_type(rhs))
-    {
-        POP();
-        return Nil;
-    }
-
-    Object* ret = Nil;
-
-    switch (get_type(lhs))
-    {
-    case TYPE_CONST:
-        ret = True;
-        break;
-
-    case TYPE_CELL:
-    case TYPE_BUILTIN:
-    case TYPE_FUNCTION:
-    case TYPE_MACRO:
-        ret = Nil;
-        break;
-
-    case TYPE_NUMBER:
-        ret = lhs->number == rhs->number ? True : Nil;
-        break;
-
-    case TYPE_SYMBOL:
-        ret = strcmp(lhs->name, rhs->name) == 0 ? True : Nil;
-        break;
-
-    default:
-        assert(!true);
-        break;
-    }
-
-    if (is_debug)
-    {
-        printf("Equals: ");
-        print(ret);
-    }
-
+    Object* lhs = eval(scope, car(args));
+    Object* rhs = eval(scope, car(cdr(args)));
     POP();
-    return ret;
+
+    // All types except cons cells can be compared for equality by comparing the
+    // pointers. For cons cells, this function returns true if the two values
+    // point to the same cons cell which is not what equality means for e.g. two
+    // lists. Comparing lists must be done using other means.
+    debug("Equals: %s", lhs == rhs ? "t" : "nil");
+    return lhs == rhs ? True : Nil;
 }
 
 Object* builtin_if(Object* scope, Object* args)
@@ -1753,8 +1662,18 @@ Object* builtin_defmacro(Object* scope, Object* args)
         return Nil;
     }
 
-    Object* func = builtin_defun(scope, args);
-    func->type = TYPE_MACRO;
+    Object* name = car(args);
+    Object* params = car(cdr(args));
+    Object* body = car(cdr(cdr(args)));
+    Object* func = Nil;
+    PUSH5(scope, name, params, body, func);
+
+    func = make_function(params, body, scope);
+    func = get_func(func);
+    func->moved = (Object*)TYPE_MACRO;
+    func = make_ptr(func, TYPE_MACRO);
+    bind_value(scope, name, func);
+    POP();
     return func;
 }
 
@@ -1820,7 +1739,7 @@ Object* builtin_load(Object* scope, Object* args)
     {
         expr = parse_expr();
 
-        if (expr)
+        if (expr != Undefined)
         {
             ret = eval(scope, expr);
 
@@ -1905,7 +1824,7 @@ void parse()
         printf("\n");
     }
 
-    if (obj)
+    if (obj != Undefined)
     {
         if (is_debug)
         {
