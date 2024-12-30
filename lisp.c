@@ -88,6 +88,7 @@ int get_type(Object* obj)
 struct Frame
 {
     struct Frame* next;
+    int size;
     Object** vars[MAX_VARS];
 };
 
@@ -104,15 +105,15 @@ const char* get_symbol(Object* obj)
     return obj->name;
 }
 
-#define ENTER() Frame frame; frame.next = stack_top; stack_top = &frame
-#define SETEND(n) frame.vars[n] = NULL
+#define ENTER() Frame frame; frame.next = stack_top; frame.size = 0; stack_top = &frame
+#define SETEND(n) frame.size = n
 #define PUSH1(a) ENTER(); frame.vars[0] = &a; SETEND(1)
 #define PUSH2(a, b) PUSH1(a); frame.vars[1] = &b; SETEND(2)
 #define PUSH3(a, b, c) PUSH2(a, b); frame.vars[2] = &c; SETEND(3)
 #define PUSH4(a, b, c, d) PUSH3(a, b, c); frame.vars[3] = &d; SETEND(4)
 #define PUSH5(a, b, c, d, e) PUSH4(a, b, c, d); frame.vars[4] = &e; SETEND(5)
 #define PUSH6(a, b, c, d, e, f) PUSH5(a, b, c, d, e); frame.vars[5] = &f; SETEND(6)
-#define PUSH7(a, b, c, d, e, f, g) PUSH6(a, b, c, d, e, f); frame.vars[6] = &g;
+#define PUSH7(a, b, c, d, e, f, g) PUSH6(a, b, c, d, e, f); frame.vars[6] = &g; SETEND(7)
 #define POP() stack_top = frame.next;
 
 Object Nil_obj = {.type = TYPE_CONST, .number = 0};
@@ -326,7 +327,7 @@ void collect_garbage()
 
     for (Frame* f = stack_top; f; f = f->next)
     {
-        for (int i = 0; i < MAX_VARS && f->vars[i]; i++)
+        for (int i = 0; i < f->size; i++)
         {
             *f->vars[i] = make_living(*f->vars[i]);
         }
