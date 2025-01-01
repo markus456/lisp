@@ -168,4 +168,4 @@ void print(Object* obj);
 
 void error(const char* fmt, ...);
 
-void debug(const char* fmt, ...);
+void debug(const char* fmt, ...) __attribute__((format(printf, 1, 2)));

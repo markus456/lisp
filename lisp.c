@@ -1,4 +1,6 @@
 #include "lisp.h"
+#include "compiler.h"
+
 
 #define MAX_SYMBOL_LEN 1024
 
@@ -912,8 +914,7 @@ Object* eval_cell(Object* scope, Object* obj)
     }
     else if (type == TYPE_FUNCTION)
     {
-        Object* env = func_env(fn);
-        next_scope = new_scope(env != Nil ? env : scope);
+        next_scope = new_scope(func_env(fn));
         param = func_params(fn);
         arg = cdr(obj);
         assert(param == Nil || get_type(param) == TYPE_CELL);
@@ -940,6 +941,10 @@ Object* eval_cell(Object* scope, Object* obj)
             error("Too many arguments to function '%s'. Expected %d, have %d.",
                   get_type(sym) == TYPE_SYMBOL ? get_symbol(sym) : "<func>",
                   length(func_params(fn)), length(cdr(obj)));
+        }
+        else if (get_func(fn)->compiled == COMPILE_CODE)
+        {
+            ret = jit_eval(next_scope, fn);
         }
         else
         {
@@ -1069,142 +1074,6 @@ Object* eval(Object* scope, Object* obj)
     POP();
 #endif
     return ret;
-}
-
-typedef bool (*CompileFunc)(Object* scope, Object* name, Object* self, Object* params, Object* body);
-
-bool resolve_symbols(Object* scope, Object* name, Object* self, Object* params, Object* body)
-{
-    bool ok = true;
-
-    if (get_type(body) == TYPE_CELL && get_type(car(body)) == TYPE_SYMBOL)
-    {
-        Object* sym = car(body);
-        bool is_param = false;
-
-        for (Object* p = params; get_type(p) == TYPE_CELL; p = cdr(p))
-        {
-            if (car(p) == sym)
-            {
-                is_param = true;
-                break;
-            }
-        }
-
-        if (is_param)
-        {
-            debug("Symbol '%s' is a parameter of the function, not a builtin function", get_symbol(sym));
-        }
-        else if (sym == name)
-        {
-            debug("Symbol '%s' points to the function itself, resolving immediately", get_symbol(sym));
-            get_obj(body)->car = self;
-        }
-        else
-        {
-            Object* val = symbol_lookup(scope, sym);
-
-            if (val == Undefined)
-            {
-                error("Undefined symbol: %s", get_symbol(sym));
-                ok = false;
-            }
-            else
-            {
-                int type = get_type(val);
-
-                if (type == TYPE_BUILTIN || type == TYPE_FUNCTION || type == TYPE_MACRO)
-                {
-                    debug("Symbol '%s' is a special form, function or macro.", get_symbol(sym));
-                    Object* global_val = symbol_lookup(Env, sym);
-
-                    if (val != global_val)
-                    {
-                        debug("Symbol '%s' does not come from the global scope.", get_symbol(sym));
-                    }
-                    else
-                    {
-                        debug("Symbol '%s' is from the global scope, resolving immediately.", get_symbol(sym));
-                        get_obj(body)->car = val;
-                    }
-                }
-            }
-        }
-
-        for (body = cdr(body); get_type(body) == TYPE_CELL; body = cdr(body))
-        {
-            if (get_type(car(body)) == TYPE_CELL)
-            {
-                if (!resolve_symbols(scope, name, self, params, car(body)))
-                {
-                    ok = false;
-                }
-            }
-        }
-    }
-
-    return ok;
-}
-
-bool compile_code(Object* scope, Object* name, Object* self, Object* params, Object* body)
-{
-    (void)scope;
-    (void)name;
-    (void)self;
-    (void)params;
-    (void)body;
-    return true;
-}
-
-void compile_function(Object* scope, Object* args, CompileFunc compile_func)
-{
-    Object* name = Nil;
-    Object* func = Nil;
-    PUSH4(scope, args, name, func);
-
-    for (; get_type(args) == TYPE_CELL; args = cdr(args))
-    {
-        if (get_type(car(args)) != TYPE_SYMBOL)
-        {
-            error("Argument is not a symbol");
-        }
-        else
-        {
-            name = car(args);
-
-            if (get_type(name) == TYPE_CELL)
-            {
-                name = eval(scope, name);
-            }
-
-            func = symbol_lookup(scope, name);
-
-            if (func == Undefined)
-            {
-                error("Undefined symbol: %s", get_symbol(name));
-            }
-            else if (get_type(func) != TYPE_FUNCTION)
-            {
-                error("Symbol '%s' does not point to a function", get_symbol(name));
-            }
-            else
-            {
-                // Resolve all of the symbols in the function body that point to known
-                // functions or macros with the final value. This removes the need for a
-                // symbol lookup during the execution of the function.
-                if (!compile_func(scope, name, func, func_params(func), func_body(func)))
-                {
-                    error("Compilation failed");
-                }
-                else
-                {
-                    get_obj(func)->compiled = 1;
-                }
-            }
-        }
-    }
-
-    POP();
 }
 
 // Builtin operators
@@ -1642,15 +1511,15 @@ Object* builtin_defun(Object* scope, Object* args)
     return func;
 }
 
+Object* builtin_freeze(Object* scope, Object* args)
+{
+    jit_resolve_symbols(scope, args);
+    return Nil;
+}
+
 Object* builtin_compile(Object* scope, Object* args)
 {
-    compile_function(scope, args, resolve_symbols);
-
-    if (no_error())
-    {
-        compile_function(scope, args, compile_code);
-    }
-
+    jit_compile(scope, args);
     return Nil;
 }
 
@@ -1785,6 +1654,7 @@ void define_builtins()
     define_builtin_function("lambda", builtin_lambda);
     define_builtin_function("define", builtin_define);
     define_builtin_function("defun", builtin_defun);
+    define_builtin_function("freeze", builtin_freeze);
     define_builtin_function("compile", builtin_compile);
     define_builtin_function("defmacro", builtin_defmacro);
     define_builtin_function("macroexpand", builtin_macroexpand);
@@ -1928,5 +1798,6 @@ int main(int argc, char** argv)
         parse();
     }
 
+    jit_free();
     free(mem_root);
 }
