@@ -717,7 +717,7 @@ Object* parse_number()
 
         if (val >= LONG_MAX >> 2)
         {
-            error("Integer overflow");
+            error("Integer overflow, value is larger than %lu", (LONG_MAX >> 2) - 1);
             return Nil;
         }
     }
@@ -1718,7 +1718,7 @@ void parse()
 
         obj = eval(Env, obj);
 
-        if (!quiet)
+        if (!quiet && obj != Undefined)
         {
             print(obj);
         }
