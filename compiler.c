@@ -20,13 +20,15 @@ CompiledFunction* compiled_functions = NULL;
 typedef bool (*CompileFunc)(Object* scope, Object* name, Object* self, Object* params, Object* body);
 
 // The declarations for builtins that we know of and can compile
+Object* builtin_if(Object* scope, Object* args);
 Object* builtin_less(Object* scope, Object* args);
 Object* builtin_add(Object* scope, Object* args);
+Object* builtin_sub(Object* scope, Object* args);
 Object* builtin_eq(Object* scope, Object* args);
 Object* builtin_car(Object* scope, Object* args);
 Object* builtin_cdr(Object* scope, Object* args);
 
-bool compile_expr(uint8_t** ptr, Object* params, Object* body);
+bool compile_expr(uint8_t** mem, Object* self, Object* params, Object* body);
 
 bool is_parameter(Object* params, Object* value)
 {
@@ -189,14 +191,14 @@ bool compile_immediate(uint8_t** mem, Object* arg)
     return true;
 }
 
-bool compile_add(uint8_t** mem, Object* params, Object* args)
+bool compile_add(uint8_t** mem, Object* self, Object* params, Object* args)
 {
     EMIT_MOV64_PTR_IMM32(REG_STACK, 0);
     EMIT_ADD64_IMM8(REG_STACK, OBJ_SIZE);
 
     for (; args != Nil; args = cdr(args))
     {
-        compile_expr(mem, params, car(args));
+        compile_expr(mem, self, params, car(args));
         EMIT_ADD64_OFF8_REG(REG_STACK, REG_RET, -8);
     }
 
@@ -205,14 +207,41 @@ bool compile_add(uint8_t** mem, Object* params, Object* args)
     return true;
 }
 
-bool compile_less(uint8_t** mem, Object* params, Object* args)
+bool compile_sub(uint8_t** mem, Object* self, Object* params, Object* args)
+{
+    if (length(args) == 1)
+    {
+        compile_expr(mem, self, params, car(args));
+        EMIT_NEG64(REG_RET);
+    }
+    else
+    {
+        assert(length(args) > 1);
+        compile_expr(mem, self, params, car(args));
+        EMIT_MOV64_PTR_REG(REG_STACK, REG_RET);
+        EMIT_ADD64_IMM8(REG_STACK, OBJ_SIZE);
+
+        for (args = cdr(args); args != Nil; args = cdr(args))
+        {
+            compile_expr(mem, self, params, car(args));
+            EMIT_NEG64(REG_RET); // This is a bit lazy...
+            EMIT_ADD64_OFF8_REG(REG_STACK, REG_RET, -8);
+        }
+
+        EMIT_ADD64_IMM8(REG_STACK, -OBJ_SIZE);
+        EMIT_MOV64_REG_PTR(REG_RET, REG_STACK);
+    }
+    return true;
+}
+
+bool compile_less(uint8_t** mem, Object* self, Object* params, Object* args)
 {
     EMIT_ADD64_IMM8(REG_STACK, OBJ_SIZE);
 
-    compile_expr(mem, params, car(args));
+    compile_expr(mem, self, params, car(args));
     EMIT_SAR64_IMM8(REG_RET, 2);
     EMIT_MOV64_OFF8_REG(REG_STACK, REG_RET, -8);
-    compile_expr(mem, params, car(cdr(args)));
+    compile_expr(mem, self, params, car(cdr(args)));
     EMIT_SAR64_IMM8(REG_RET, 2);
 
     EMIT_ADD64_IMM8(REG_STACK, -OBJ_SIZE);
@@ -228,13 +257,13 @@ bool compile_less(uint8_t** mem, Object* params, Object* args)
     return true;
 }
 
-bool compile_eq(uint8_t** mem, Object* params, Object* args)
+bool compile_eq(uint8_t** mem, Object* self, Object* params, Object* args)
 {
     EMIT_ADD64_IMM8(REG_STACK, OBJ_SIZE);
 
-    compile_expr(mem, params, car(args));
+    compile_expr(mem, self, params, car(args));
     EMIT_MOV64_OFF8_REG(REG_STACK, REG_RET, -8);
-    compile_expr(mem, params, car(cdr(args)));
+    compile_expr(mem, self, params, car(cdr(args)));
 
     EMIT_ADD64_IMM8(REG_STACK, -OBJ_SIZE);
     EMIT_CMP64_REG_PTR(REG_RET, REG_STACK);
@@ -249,21 +278,38 @@ bool compile_eq(uint8_t** mem, Object* params, Object* args)
     return true;
 }
 
-bool compile_car(uint8_t** mem, Object* params, Object* args)
+bool compile_if(uint8_t** mem, Object* self, Object* params, Object* args)
 {
-    compile_expr(mem, params, car(args));
+    compile_expr(mem, self, params, car(args));
+    EMIT_CMP64_REG_IMM8(REG_RET, (intptr_t)Nil);
+    EMIT_JE_OFF8();
+    uint8_t* jump_to_false = *mem;
+    compile_expr(mem, self, params, car(cdr(args)));
+    EMIT_JMP_OFF8();
+    uint8_t* jump_to_end = *mem;
+    compile_expr(mem, self, params, car(cdr(cdr(args))));
+    uint8_t* end = *mem;
+    PATCH_JMP8(jump_to_false - 1, jump_to_end - jump_to_false);
+    PATCH_JMP8(jump_to_end - 1, end - jump_to_end);
+
+    return true;
+}
+
+bool compile_car(uint8_t** mem, Object* self, Object* params, Object* args)
+{
+    compile_expr(mem, self, params, car(args));
     EMIT_MOV64_REG_OFF8(REG_RET, REG_RET, -TYPE_CELL + offsetof(Object, car));
     return true;
 }
 
-bool compile_cdr(uint8_t** mem, Object* params, Object* args)
+bool compile_cdr(uint8_t** mem, Object* self, Object* params, Object* args)
 {
-    compile_expr(mem, params, car(args));
+    compile_expr(mem, self, params, car(args));
     EMIT_MOV64_REG_OFF8(REG_RET, REG_RET, -TYPE_CELL + offsetof(Object, cdr));
     return true;
 }
 
-bool compile_expr(uint8_t** mem, Object* params, Object* obj)
+bool compile_expr(uint8_t** mem, Object* self, Object* params, Object* obj)
 {
     switch (get_type(obj))
     {
@@ -271,25 +317,37 @@ bool compile_expr(uint8_t** mem, Object* params, Object* obj)
         {
             Object* fn = car(obj);
 
-            if (get_obj(fn)->fn == builtin_add)
+            if (fn == self)
             {
-                return compile_add(mem, params, cdr(obj));
+                error("RECURSIVE FUNCTION");
+            }
+            else if (get_obj(fn)->fn == builtin_add)
+            {
+                return compile_add(mem, self, params, cdr(obj));
+            }
+            else if (get_obj(fn)->fn == builtin_sub)
+            {
+                return compile_sub(mem, self, params, cdr(obj));
             }
             else if (get_obj(fn)->fn == builtin_less)
             {
-                return compile_less(mem, params, cdr(obj));
+                return compile_less(mem, self, params, cdr(obj));
             }
             else if (get_obj(fn)->fn == builtin_eq)
             {
-                return compile_eq(mem, params, cdr(obj));
+                return compile_eq(mem, self, params, cdr(obj));
             }
             else if (get_obj(fn)->fn == builtin_car)
             {
-                return compile_car(mem, params, cdr(obj));
+                return compile_car(mem, self, params, cdr(obj));
             }
             else if (get_obj(fn)->fn == builtin_cdr)
             {
-                return compile_cdr(mem, params, cdr(obj));
+                return compile_cdr(mem, self, params, cdr(obj));
+            }
+            else if (get_obj(fn)->fn == builtin_if)
+            {
+                return compile_if(mem, self, params, cdr(obj));
             }
             else
             {
@@ -311,9 +369,9 @@ bool compile_expr(uint8_t** mem, Object* params, Object* obj)
     return false;
 }
 
-bool generate_bytecode(uint8_t** mem, Object* /*scope*/, Object* /*name*/, Object* /*self*/, Object* params, Object* body)
+bool generate_bytecode(uint8_t** mem, Object* /*scope*/, Object* /*name*/, Object* self, Object* params, Object* body)
 {
-    bool ok = compile_expr(mem, params, body);
+    bool ok = compile_expr(mem, self, params, body);
     EMIT_RET();
     return ok;
 }
@@ -402,7 +460,7 @@ bool compile_function(Object* scope, Object* args, CompileFunc compile_func, uin
             }
             else if (!compile_func(scope, name, func, func_params(func), func_body(func)))
             {
-                error("Compilation failed");
+                error("Compilation of '%s' failed", get_symbol(name));
                 ok = false;
             }
             else
