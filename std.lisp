@@ -104,7 +104,7 @@
 (defun nth (a n) (if (< n 1) (car a) (nth (cdr a) (- n 1))))
 
 ;; Fill a list with values
-(defun fill (n v) (n v nil))
+(defun fill (n v) (fill_impl n v nil))
 (defun fill_impl (n v acc)
   (if (< n 1) acc (fill_impl (- n 1) v (cons v acc))))
 
