@@ -86,11 +86,20 @@
 // ADD: a += imm32
 #define EMIT_ADD64_IMM32(a, i) EMIT(REX_W); EMIT(0x81); EMIT(0xc0 | OP_RM(a)); EMIT_IMM32(i);
 
+// SAR: a >>= imm8
+#define EMIT_SAR64_IMM8(a, i) EMIT(REX_W); EMIT(0xc1); EMIT(0xc0 | OP_REG(0x7)| OP_RM(a)); EMIT_IMM8(i);
+
+// SAL: a <<= imm8
+#define EMIT_SAL64_IMM8(a, i) EMIT(REX_W); EMIT(0xc1); EMIT(0xc0 | OP_REG(0x4) | OP_RM(a)); EMIT_IMM8(i);
+
 // CMP: a == *b
 #define EMIT_CMP64_REG_PTR(a, b) EMIT(REX_W); EMIT(0x39); EMIT(OP_REG(a) | OP_RM(b));
 
 // JE: a == b (Stores a placeholder that's filled in later)
 #define EMIT_JE_OFF8() EMIT(0x74); EMIT(0x0);
+
+// JL: a < b (Stores a placeholder that's filled in later)
+#define EMIT_JL_OFF8() EMIT(0x7c); EMIT(0x0);
 
 //
 #define PATCH_JMP8(ptr, off) *(ptr) = off;

@@ -205,8 +205,26 @@ bool compile_add(uint8_t** mem, Object* params, Object* args)
     return true;
 }
 
-bool compile_less(uint8_t** /*mem*/, Object* /*params*/, Object* /*args*/)
+bool compile_less(uint8_t** mem, Object* params, Object* args)
 {
+    EMIT_ADD64_IMM8(REG_STACK, OBJ_SIZE);
+
+    compile_expr(mem, params, car(args));
+    EMIT_SAR64_IMM8(REG_RET, 2);
+    EMIT_MOV64_OFF8_REG(REG_STACK, REG_RET, -8);
+    compile_expr(mem, params, car(cdr(args)));
+    EMIT_SAR64_IMM8(REG_RET, 2);
+
+    EMIT_ADD64_IMM8(REG_STACK, -OBJ_SIZE);
+    EMIT_CMP64_REG_PTR(REG_RET, REG_STACK);
+    EMIT_MOV64_REG_IMM64(REG_RET, (intptr_t)True);
+    EMIT_JL_OFF8();
+    uint8_t* jump_start = *mem;
+
+    EMIT_MOV64_REG_IMM64(REG_RET, (intptr_t)Nil);
+    uint8_t* jump_end = *mem;
+    PATCH_JMP8(jump_start - 1, jump_end - jump_start);
+
     return true;
 }
 
