@@ -1,8 +1,8 @@
 (load std.lisp)
 ;; Configuration
 (defvar iterations 1000)
-(defvar screen_width 50)
-(defvar screen_height 35)
+(defvar screen_width 100)
+(defvar screen_height 50)
 
 ;; Constants
 (defvar newline 10)

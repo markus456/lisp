@@ -104,6 +104,10 @@
 // JMP: unconditional jump (Stores a placeholder that's filled in later)
 #define EMIT_JMP_OFF8() EMIT(0xeb); EMIT(0x0);
 
+// JMP: unconditional jump
+// NOTE: does not use a placeholder
+#define EMIT_JMP32() EMIT(0xe9);
+
 // JE: a == b (Stores a placeholder that's filled in later)
 #define EMIT_JE_OFF8() EMIT(0x74); EMIT(0x0);
 

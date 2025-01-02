@@ -28,6 +28,18 @@ Object* builtin_eq(Object* scope, Object* args);
 Object* builtin_car(Object* scope, Object* args);
 Object* builtin_cdr(Object* scope, Object* args);
 
+bool is_supported_builtin(Function fn)
+{
+    return fn == builtin_if
+        || fn == builtin_less
+        || fn == builtin_add
+        || fn == builtin_sub
+        || fn == builtin_eq
+        || fn == builtin_car
+        || fn == builtin_cdr;
+
+}
+
 bool compile_expr(uint8_t** mem, Object* self, Object* params, Object* body);
 
 bool is_parameter(Object* params, Object* value)
@@ -104,7 +116,7 @@ bool resolve_symbols(Object* scope, Object* name, Object* self, Object* params, 
     return true;
 }
 
-bool valid_for_compile(Object* params, Object* body)
+bool valid_for_compile(Object* self, Object* params, Object* body)
 {
     int type = get_type(body);
     if (type == TYPE_NUMBER || type == TYPE_CONST)
@@ -126,20 +138,33 @@ bool valid_for_compile(Object* params, Object* body)
         debug_print(body);
         return false;
     }
-    else if (get_type(car(body)) != TYPE_BUILTIN)
+
+    Object* func = car(body);
+
+    if (func == self)
     {
-        error("Not a builtin, too complex.");
+        debug("Self-recursive function");
+    }
+    else if (get_type(func) != TYPE_BUILTIN)
+    {
+        error("Not a builtin, too complex");
+        print(body);
+        return false;
+    }
+    else if (!is_supported_builtin(get_obj(func)->fn))
+    {
+        error("Builtin not supported, too complex");
         print(body);
         return false;
     }
 
-    assert(get_type(car(body)) == TYPE_BUILTIN);
-    debug("Builtin function, checking all arguments");
+    assert(get_type(car(body)) == TYPE_BUILTIN || func == self);
+    debug("Builtin function or self-recursion, checking all arguments");
     debug_print(body);
 
     for (body = cdr(body); get_type(body) == TYPE_CELL; body = cdr(body))
     {
-        if (!valid_for_compile(params, car(body)))
+        if (!valid_for_compile(self, params, car(body)))
         {
             return false;
         }
@@ -309,6 +334,36 @@ bool compile_cdr(uint8_t** mem, Object* self, Object* params, Object* args)
     return true;
 }
 
+bool compile_recursion(uint8_t** mem, Object* self, Object* params, Object* args)
+{
+    int len = length(args);
+    int pos = 0;
+    EMIT_ADD64_IMM8(REG_STACK, OBJ_SIZE * len);
+
+    for (; args != Nil; args = cdr(args))
+    {
+        compile_expr(mem, self, params, car(args));
+        EMIT_MOV64_OFF8_REG(REG_STACK, REG_RET, -8 * (len - pos));
+        pos++;
+    }
+
+    for (int i = 0; i < len; i++)
+    {
+        EMIT_MOV64_REG_OFF8(REG_RET, REG_STACK, -8 * (len - i));
+        EMIT_MOV64_OFF8_REG(REG_ARGS, REG_RET, i * 8);
+    }
+
+    EMIT_ADD64_IMM8(REG_STACK, -OBJ_SIZE * len);
+
+    // Patch the offset right away
+    EMIT_JMP32();
+    uint8_t* start = (uint8_t*)func_body(self);
+    ptrdiff_t backwards = start - *mem - 4; // The extra 4 is for the imm32 that we emit right now
+    EMIT_IMM32(backwards);
+
+    return true;
+}
+
 bool compile_expr(uint8_t** mem, Object* self, Object* params, Object* obj)
 {
     switch (get_type(obj))
@@ -319,7 +374,7 @@ bool compile_expr(uint8_t** mem, Object* self, Object* params, Object* obj)
 
             if (fn == self)
             {
-                error("RECURSIVE FUNCTION");
+                return compile_recursion(mem, self, params, cdr(obj));
             }
             else if (get_obj(fn)->fn == builtin_add)
             {
@@ -378,7 +433,7 @@ bool generate_bytecode(uint8_t** mem, Object* /*scope*/, Object* /*name*/, Objec
 
 bool compile_to_bytecode(Object* scope, Object* name, Object* self, Object* params, Object* body)
 {
-    if (!valid_for_compile(params, body))
+    if (!valid_for_compile(self, params, body))
     {
         return false;
     }
@@ -387,6 +442,9 @@ bool compile_to_bytecode(Object* scope, Object* name, Object* self, Object* para
 
     void* memory = mmap(NULL, COMPILE_MEM_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     uint8_t* ptr = (uint8_t*)memory;
+    Object* old_body = func_body(self);
+    // The body is used to store the pointer that self-recursive functions need
+    get_obj(self)->func_body = (Object*) memory;
     bool ok = generate_bytecode(&ptr, scope, name, self, params, body);
 
     if (ok)
@@ -403,7 +461,6 @@ bool compile_to_bytecode(Object* scope, Object* name, Object* self, Object* para
             system(buffer);
         }
 
-        get_obj(self)->func_body = (Object*) memory;
         get_obj(self)->compiled = COMPILE_CODE;
 
         CompiledFunction* comp = malloc(sizeof(CompiledFunction));
@@ -414,6 +471,7 @@ bool compile_to_bytecode(Object* scope, Object* name, Object* self, Object* para
     }
     else
     {
+        get_obj(self)->func_body = old_body;
         munmap(memory, COMPILE_MEM_SIZE);
     }
 
