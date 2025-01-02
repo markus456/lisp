@@ -36,52 +36,65 @@ bool is_parameter(Object* params, Object* value)
     return false;
 }
 
+Object* resolve_one_symbol(Object* scope, Object* name, Object* self, Object* params, Object* sym)
+{
+    if (is_parameter(params, sym))
+    {
+        debug("Symbol '%s' is a parameter of the function, not a builtin function", get_symbol(sym));
+        return sym;
+    }
+    else if (sym == name)
+    {
+        debug("Symbol '%s' points to the function itself, resolving immediately", get_symbol(sym));
+        return self;
+    }
+
+    Object* val = symbol_lookup(scope, sym);
+
+    if (val == Undefined)
+    {
+        error("Undefined symbol: %s", get_symbol(sym));
+    }
+    else
+    {
+        debug("Symbol '%s' found, resolving immediately.", get_symbol(sym));
+    }
+
+    return val;
+}
+
 bool resolve_symbols(Object* scope, Object* name, Object* self, Object* params, Object* body)
 {
-    bool ok = true;
+    assert(get_type(body) == TYPE_CELL);
 
-    if (get_type(body) == TYPE_CELL && get_type(car(body)) == TYPE_SYMBOL)
+    for (; body != Nil; body = cdr(body))
     {
-        Object* sym = car(body);
+        Object* val = car(body);
+        int type = get_type(val);
 
-        if (is_parameter(params, sym))
+        if (type == TYPE_SYMBOL)
         {
-            debug("Symbol '%s' is a parameter of the function, not a builtin function", get_symbol(sym));
-        }
-        else if (sym == name)
-        {
-            debug("Symbol '%s' points to the function itself, resolving immediately", get_symbol(sym));
-            get_obj(body)->car = self;
-        }
-        else
-        {
-            Object* val = symbol_lookup(scope, sym);
+            val = resolve_one_symbol(scope, name, self, params, val);
 
             if (val == Undefined)
             {
-                error("Undefined symbol: %s", get_symbol(sym));
-                ok = false;
+                return false;
             }
             else
             {
-                debug("Symbol '%s' found, resolving immediately.", get_symbol(sym));
                 get_obj(body)->car = val;
             }
         }
-
-        for (body = cdr(body); get_type(body) == TYPE_CELL; body = cdr(body))
+        else if (type == TYPE_CELL)
         {
-            if (get_type(car(body)) == TYPE_CELL)
+            if (!resolve_symbols(scope, name, self, params, val))
             {
-                if (!resolve_symbols(scope, name, self, params, car(body)))
-                {
-                    ok = false;
-                }
+                return false;
             }
         }
     }
 
-    return ok;
+    return true;
 }
 
 void jit_free()
