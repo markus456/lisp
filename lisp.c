@@ -126,6 +126,11 @@ void debug(const char* fmt, ...)
 }
 #endif
 
+bool debug_on()
+{
+    return is_debug;
+}
+
 // Memory allocation and object sizes
 
 size_t allocation_size(size_t size)
@@ -621,6 +626,15 @@ void print(Object* obj)
     printf("\n");
 }
 
+void debug_print(Object* obj)
+{
+    if (is_debug)
+    {
+        print_one(obj);
+        printf("\n");
+    }
+}
+
 // Parsing and tokenization
 
 int peek()
@@ -944,7 +958,8 @@ Object* eval_cell(Object* scope, Object* obj)
         }
         else if (get_func(fn)->compiled == COMPILE_CODE)
         {
-            ret = jit_eval(next_scope, fn);
+            // The arguments to the function are bound to the newest scope.
+            ret = jit_eval(fn, car(next_scope));
         }
         else
         {
@@ -1707,7 +1722,8 @@ void parse()
         {
             print(obj);
         }
-        else if (error_ptr)
+
+        if (error_ptr)
         {
             --error_ptr;
 

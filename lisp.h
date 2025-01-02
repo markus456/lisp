@@ -164,7 +164,10 @@ Object* cdr(Object* obj);
 Object* eval(Object* scope, Object* obj);
 int length(Object* list);
 
+bool debug_on();
+
 void print(Object* obj);
+void debug_print(Object* obj);
 
 void error(const char* fmt, ...);
 
