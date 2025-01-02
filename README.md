@@ -5,11 +5,10 @@ A simple lisp interpreter.
 # Building the Example
 
 An example Game of Life program written in this Lisp language is included. To
-build it:
+build and run it:
 
 ```
-make release
-./lisp -q < game-of-life.lisp
+make demo
 ```
 
 # Language Features
@@ -24,6 +23,9 @@ make release
   the last argument of the `progn` function.
 
 - Symbols must be less than 1024 characters long.
+
+- Rudimentary compilation into x86-64 bytecode is supported by the `compile`
+  function.
 
 ### Special Forms (builtin functions)
 
@@ -67,6 +69,16 @@ make release
 - `defun`: Defines a function. The first argument is the function name, the
   second is the argument list and the third argument is the function body.
 
+- `freeze`: Resolves all symbols in the functions given as the arguments. This
+  effectively makes them pure functions as global variables are resolved by
+  this.
+
+- `compile`: Compile all of the functions given as the arguments. The supported
+  builtins that can be compiled are `+`, `-`, `<`, `eq`, `car`, `cdr` and
+  `if`. Self-recursion is also supported. If the `-d` flag is used, the compiled
+  code is disassembled by GDB whenever `compile` is called, make sure GDB is
+  installed on your system.
+
 - `defmacro`: Defines a macro. Macro expansion behaves similarly to function
   execution except that the arguments to the macro are not evaluated and the
   macro expansion always happens in the global scope.
@@ -88,6 +100,9 @@ make release
   names that have spaces in them cannot be loaded.
 
 - `exit`: Exits the program immediately.
+
+- `debug`: If the first argument is non-nil, debug mode is turned on. Only in
+  debug builds.
 
 # Building
 
