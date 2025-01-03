@@ -249,8 +249,7 @@ bool compile_sub(uint8_t** mem, Object* self, Object* params, Object* args)
         for (args = cdr(args); args != Nil; args = cdr(args))
         {
             compile_expr(mem, self, params, car(args));
-            EMIT_NEG64(REG_RET); // This is a bit lazy...
-            EMIT_ADD64_OFF8_REG(REG_STACK, REG_RET, -8);
+            EMIT_SUB64_OFF8_REG(REG_STACK, REG_RET, -8);
         }
 
         EMIT_ADD64_IMM8(REG_STACK, -OBJ_SIZE);

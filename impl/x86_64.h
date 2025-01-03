@@ -86,6 +86,9 @@
 // ADD: a += imm32
 #define EMIT_ADD64_IMM32(a, i) EMIT(REX_W); EMIT(0x81); EMIT(0xc0 | OP_RM(a)); EMIT_IMM32(i);
 
+// SUB: a[off] += b
+#define EMIT_SUB64_OFF8_REG(a, b, off) EMIT(REX_W); EMIT(0x29); EMIT(0x40 |  OP_REG(b) | OP_RM(a)); EMIT(off);
+
 // NEG: a = -a
 #define EMIT_NEG64(a) EMIT(REX_W); EMIT(0xf7); EMIT(0xc0 | OP_REG(0x3) | OP_RM(a));
 
