@@ -1,7 +1,6 @@
 #include "lisp.h"
 #include "compiler.h"
 
-
 #define MAX_SYMBOL_LEN 1024
 
 #define ALWAYS_GC 0
@@ -86,22 +85,14 @@ double memory_pct = 75.0;
 void print(Object* obj);
 void print_one(Object* obj);
 
-char error_stack[16][128];
-uint8_t error_ptr = 0;
-
-bool no_error()
-{
-    return error_ptr == 0;
-}
-
 void error(const char* fmt, ...)
 {
-    int slot = error_ptr % 16;
+    printf("Error: ");
     va_list args;
     va_start(args, fmt);
-    vsnprintf(error_stack[slot], sizeof(error_stack[0]), fmt, args);
+    vprintf(fmt, args);
     va_end(args);
-    error_ptr++;
+    printf("\n");
 }
 
 #ifdef NDEBUG
@@ -1629,6 +1620,7 @@ Object* builtin_load(Object* scope, Object* args)
 
             if (!quiet)
             {
+                assert(ret != Undefined);
                 print(ret);
             }
         }
@@ -1721,23 +1713,6 @@ void parse()
         if (!quiet && obj != Undefined)
         {
             print(obj);
-        }
-
-        if (error_ptr)
-        {
-            --error_ptr;
-
-            for (int i = 16; i >= 0; i--)
-            {
-                int slot = error_ptr - i;
-
-                if (slot >= 0)
-                {
-                    printf("Error: %s\n", error_stack[slot % 16]);
-                }
-            }
-
-            error_ptr = 0;
         }
     }
     else if (peek() == EOF)
