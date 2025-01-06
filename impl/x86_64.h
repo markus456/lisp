@@ -143,6 +143,9 @@
 // Patches the jump point
 void PATCH_JMP32(uint8_t* ptr, uint32_t off);
 
+// CALL, address is stored in register
+#define EMIT_CALL_REG(a) EMIT(0xff); EMIT(0xc0 | OP_REG(0x2) | OP_RM(a));
+
 // RET
 #define EMIT_RET() EMIT(0xc3);
 

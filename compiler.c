@@ -145,9 +145,13 @@ bool valid_for_compile(Object* self, Object* params, Object* body)
     {
         debug("Self-recursive function");
     }
+    else if (get_type(func) == TYPE_FUNCTION && get_obj(func)->compiled == COMPILE_CODE)
+    {
+        debug("Other compiled function");
+    }
     else if (get_type(func) != TYPE_BUILTIN)
     {
-        error("Not a builtin, too complex");
+        error("Not a builtin or a compiled function, too complex");
         print(body);
         return false;
     }
@@ -158,7 +162,8 @@ bool valid_for_compile(Object* self, Object* params, Object* body)
         return false;
     }
 
-    assert(get_type(car(body)) == TYPE_BUILTIN || func == self);
+    assert(get_type(car(body)) == TYPE_BUILTIN || func == self
+           || (get_type(car(body)) == TYPE_FUNCTION && get_obj(car(body))->compiled == COMPILE_CODE));
     debug("Builtin function or self-recursion, checking all arguments");
     debug_print(body);
 
@@ -374,6 +379,33 @@ bool compile_recursion(uint8_t** mem, Object* self, Object* params, Object* args
     return true;
 }
 
+bool compile_call(uint8_t** mem, Object* self, Object* params, Object* func, Object* args)
+{
+    int len = length(args);
+    int pos = 0;
+    RESERVE_STACK(OBJ_SIZE * len);
+
+    for (; args != Nil; args = cdr(args))
+    {
+        compile_expr(mem, self, params, car(args));
+        EMIT_MOV64_OFF8_REG(REG_FRAME, REG_RET, -OBJ_SIZE * (len - pos));
+        pos++;
+    }
+
+    EMIT_PUSH(REG_ARGS);
+    EMIT_MOV64_REG_REG(REG_ARGS, REG_FRAME);
+    EMIT_SUB64_IMM8(REG_ARGS, OBJ_SIZE * len);
+
+    intptr_t fn = (intptr_t)func_body(func);
+    EMIT_MOV64_REG_IMM64(REG_RET, fn);
+    EMIT_CALL_REG(REG_RET);
+
+    EMIT_POP(REG_ARGS);
+    FREE_STACK(OBJ_SIZE * len);
+
+    return true;
+}
+
 bool compile_expr(uint8_t** mem, Object* self, Object* params, Object* obj)
 {
     switch (get_type(obj))
@@ -385,6 +417,10 @@ bool compile_expr(uint8_t** mem, Object* self, Object* params, Object* obj)
             if (fn == self)
             {
                 return compile_recursion(mem, self, params, cdr(obj));
+            }
+            else if (get_type(fn) == TYPE_FUNCTION)
+            {
+                return compile_call(mem, self, params, fn, cdr(obj));
             }
             else if (get_obj(fn)->fn == builtin_add)
             {

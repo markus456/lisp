@@ -108,8 +108,19 @@
              (main_loop (compute_cell_state state nil nil (- screen_width 1) (- screen_height 1)) (+ iter 1)))))
 
 ;; Compile all of the functions
-(compile main_loop create_start_state compute_cell_state compute_cell get_neighbours
-         compute_cell_result get_xy wrap clear_screen reset_cursor print_state print_row)
+
+(compile wrap)
+(compile get_xy)
+(compile compute_cell_result)
+(compile get_neighbours)
+(compile compute_cell)
+(compile compute_cell_state)
+(compile create_start_state)
+(compile main_loop)
+(compile clear_screen)
+(compile reset_cursor)
+(compile print_state)
+(compile print_row)
 
 ;; Start the program
 (clear_screen)
