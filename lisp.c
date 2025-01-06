@@ -849,7 +849,7 @@ Object* parse_expr()
 
 Object* expand_macro(Object* scope, Object* macro, Object* args)
 {
-    Object* param = func_params(macro);
+    Object* param = get_obj(macro)->func_params;
     PUSH4(macro, param, args, scope);
     scope = new_scope(scope);
 
@@ -887,7 +887,7 @@ Object* expand_macro(Object* scope, Object* macro, Object* args)
     }
     else
     {
-        ret = eval(scope, func_body(macro));
+        ret = eval(scope, get_obj(macro)->func_body);
     }
 
     POP();
