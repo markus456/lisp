@@ -1732,10 +1732,14 @@ int main(int argc, char** argv)
     input = stdin;
     srand(time(NULL));
 
-    while ((ch = getopt(argc, argv, "dgesxm:q")) != -1)
+    while ((ch = getopt(argc, argv, "dgesxm:qr:")) != -1)
     {
         switch (ch)
         {
+        case 'r':
+            srand(atoi(optarg));
+            break;
+
         case 'm':
             memory_pct = atof(optarg);
             break;
