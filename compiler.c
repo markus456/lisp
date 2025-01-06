@@ -218,17 +218,29 @@ bool compile_immediate(uint8_t** mem, Object* arg)
 
 bool compile_add(uint8_t** mem, Object* self, Object* params, Object* args)
 {
-    EMIT_MOV64_PTR_IMM32(REG_STACK, 0);
-    EMIT_ADD64_IMM8(REG_STACK, OBJ_SIZE);
-
-    for (; args != Nil; args = cdr(args))
+    if (args == Nil)
     {
-        compile_expr(mem, self, params, car(args));
-        EMIT_ADD64_OFF8_REG(REG_STACK, REG_RET, -8);
+        return compile_immediate(mem, 0);
+    }
+    else if (cdr(args) == Nil)
+    {
+        return compile_expr(mem, self, params, car(args));
     }
 
-    EMIT_ADD64_IMM8(REG_STACK, -OBJ_SIZE);
-    EMIT_MOV64_REG_PTR(REG_RET, REG_STACK);
+    // At least two arguments
+    assert(args != Nil && cdr(args) != Nil);
+    RESERVE_STACK(OBJ_SIZE);
+    compile_expr(mem, self, params, car(args));
+    EMIT_MOV64_OFF8_REG(REG_FRAME, REG_RET, -OBJ_SIZE);
+
+    for (args = cdr(args); args != Nil; args = cdr(args))
+    {
+        compile_expr(mem, self, params, car(args));
+        EMIT_ADD64_OFF8_REG(REG_FRAME, REG_RET, -OBJ_SIZE);
+    }
+
+    EMIT_MOV64_REG_OFF8(REG_RET, REG_FRAME, -OBJ_SIZE);
+    FREE_STACK(OBJ_SIZE);
     return true;
 }
 
@@ -242,63 +254,63 @@ bool compile_sub(uint8_t** mem, Object* self, Object* params, Object* args)
     else
     {
         assert(length(args) > 1);
+        RESERVE_STACK(OBJ_SIZE);
         compile_expr(mem, self, params, car(args));
-        EMIT_MOV64_PTR_REG(REG_STACK, REG_RET);
-        EMIT_ADD64_IMM8(REG_STACK, OBJ_SIZE);
+        EMIT_MOV64_OFF8_REG(REG_FRAME, REG_RET, -OBJ_SIZE);
 
         for (args = cdr(args); args != Nil; args = cdr(args))
         {
             compile_expr(mem, self, params, car(args));
-            EMIT_SUB64_OFF8_REG(REG_STACK, REG_RET, -8);
+            EMIT_SUB64_OFF8_REG(REG_FRAME, REG_RET, -OBJ_SIZE);
         }
 
-        EMIT_ADD64_IMM8(REG_STACK, -OBJ_SIZE);
-        EMIT_MOV64_REG_PTR(REG_RET, REG_STACK);
+        EMIT_MOV64_REG_OFF8(REG_RET, REG_FRAME, -OBJ_SIZE);
+        FREE_STACK(OBJ_SIZE);
     }
     return true;
 }
 
 bool compile_less(uint8_t** mem, Object* self, Object* params, Object* args)
 {
-    EMIT_ADD64_IMM8(REG_STACK, OBJ_SIZE);
+    RESERVE_STACK(OBJ_SIZE);
 
     compile_expr(mem, self, params, car(args));
     EMIT_SAR64_IMM8(REG_RET, 2);
-    EMIT_MOV64_OFF8_REG(REG_STACK, REG_RET, -8);
+    EMIT_MOV64_OFF8_REG(REG_FRAME, REG_RET, -OBJ_SIZE);
     compile_expr(mem, self, params, car(cdr(args)));
     EMIT_SAR64_IMM8(REG_RET, 2);
 
-    EMIT_ADD64_IMM8(REG_STACK, -OBJ_SIZE);
-    EMIT_CMP64_REG_PTR(REG_RET, REG_STACK);
+    EMIT_CMP64_REG_OFF8(REG_RET, REG_FRAME, -OBJ_SIZE);
     EMIT_MOV64_REG_IMM64(REG_RET, (intptr_t)True);
     EMIT_JL_OFF8();
     uint8_t* jump_start = *mem;
 
     EMIT_MOV64_REG_IMM64(REG_RET, (intptr_t)Nil);
     uint8_t* jump_end = *mem;
-    PATCH_JMP8(jump_start - 1, jump_end - jump_start);
+    PATCH_JMP8(jump_start, jump_end - jump_start);
 
+    FREE_STACK(OBJ_SIZE);
     return true;
 }
 
 bool compile_eq(uint8_t** mem, Object* self, Object* params, Object* args)
 {
-    EMIT_ADD64_IMM8(REG_STACK, OBJ_SIZE);
+    RESERVE_STACK(OBJ_SIZE);
 
     compile_expr(mem, self, params, car(args));
-    EMIT_MOV64_OFF8_REG(REG_STACK, REG_RET, -8);
+    EMIT_MOV64_OFF8_REG(REG_FRAME, REG_RET, -OBJ_SIZE);
     compile_expr(mem, self, params, car(cdr(args)));
 
-    EMIT_ADD64_IMM8(REG_STACK, -OBJ_SIZE);
-    EMIT_CMP64_REG_PTR(REG_RET, REG_STACK);
+    EMIT_CMP64_REG_OFF8(REG_RET, REG_FRAME, -OBJ_SIZE);
     EMIT_MOV64_REG_IMM64(REG_RET, (intptr_t)True);
     EMIT_JE_OFF8();
     uint8_t* jump_start = *mem;
 
     EMIT_MOV64_REG_IMM64(REG_RET, (intptr_t)Nil);
     uint8_t* jump_end = *mem;
-    PATCH_JMP8(jump_start - 1, jump_end - jump_start);
+    PATCH_JMP8(jump_start, jump_end - jump_start);
 
+    FREE_STACK(OBJ_SIZE);
     return true;
 }
 
@@ -306,15 +318,15 @@ bool compile_if(uint8_t** mem, Object* self, Object* params, Object* args)
 {
     compile_expr(mem, self, params, car(args));
     EMIT_CMP64_REG_IMM8(REG_RET, (intptr_t)Nil);
-    EMIT_JE_OFF8();
+    EMIT_JE_OFF32();
     uint8_t* jump_to_false = *mem;
     compile_expr(mem, self, params, car(cdr(args)));
-    EMIT_JMP_OFF8();
+    EMIT_JMP_OFF32();
     uint8_t* jump_to_end = *mem;
     compile_expr(mem, self, params, car(cdr(cdr(args))));
     uint8_t* end = *mem;
-    PATCH_JMP8(jump_to_false - 1, jump_to_end - jump_to_false);
-    PATCH_JMP8(jump_to_end - 1, end - jump_to_end);
+    PATCH_JMP32(jump_to_false, jump_to_end - jump_to_false);
+    PATCH_JMP32(jump_to_end, end - jump_to_end);
 
     return true;
 }
@@ -336,26 +348,25 @@ bool compile_cdr(uint8_t** mem, Object* self, Object* params, Object* args)
 bool compile_recursion(uint8_t** mem, Object* self, Object* params, Object* args)
 {
     int len = length(args);
-    int pos = 0;
-    EMIT_ADD64_IMM8(REG_STACK, OBJ_SIZE * len);
+    int pos = 1;
+    RESERVE_STACK(OBJ_SIZE * len);
 
     for (; args != Nil; args = cdr(args))
     {
         compile_expr(mem, self, params, car(args));
-        EMIT_MOV64_OFF8_REG(REG_STACK, REG_RET, -8 * (len - pos));
-        pos++;
+        EMIT_MOV64_OFF8_REG(REG_FRAME, REG_RET, -OBJ_SIZE * pos++);
     }
 
     for (int i = 0; i < len; i++)
     {
-        EMIT_MOV64_REG_OFF8(REG_RET, REG_STACK, -8 * (len - i));
-        EMIT_MOV64_OFF8_REG(REG_ARGS, REG_RET, i * 8);
+        EMIT_MOV64_REG_OFF8(REG_RET, REG_FRAME, -OBJ_SIZE * (i + 1));
+        EMIT_MOV64_OFF8_REG(REG_ARGS, REG_RET, OBJ_SIZE * i);
     }
 
-    EMIT_ADD64_IMM8(REG_STACK, -OBJ_SIZE * len);
+    FREE_STACK(OBJ_SIZE * len);
 
     // Patch the offset right away
-    EMIT_JMP32();
+    EMIT_JMP_OFF32_NO_PLACEHOLDER();
     uint8_t* start = (uint8_t*)func_body(self);
     ptrdiff_t backwards = start - *mem - 4; // The extra 4 is for the imm32 that we emit right now
     EMIT_IMM32(backwards);
@@ -544,8 +555,8 @@ void jit_compile(Object* scope, Object* args)
     }
 }
 
-// The JIT functions receive their arguments in RDI and a "stack pointer" in RSI
-typedef Object* (*JitFunc)(Object**, Object**);
+// The JIT functions receive their arguments in RDI
+typedef Object* (*JitFunc)(Object**);
 
 Object* jit_eval(Object* fn, Object* args)
 {
@@ -561,7 +572,6 @@ Object* jit_eval(Object* fn, Object* args)
     }
 
     Object* arg_stack[len + 1];
-    Object* stack[JIT_STACK_SIZE];
 
     // The function arguments are bound in the reverse order they are declared to the
     // scope. Each value is copied into the stack buffer that is then passed
@@ -573,5 +583,5 @@ Object* jit_eval(Object* fn, Object* args)
     }
 
     JitFunc func = (JitFunc)func_body(fn);
-    return func(arg_stack, stack);
+    return func(arg_stack);
 }

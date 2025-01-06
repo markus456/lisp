@@ -1,4 +1,5 @@
 #pragma once
+#include <stdint.h>
 
 //
 // x86-64 bytecode generation
@@ -24,11 +25,13 @@
 
 // Constants used in the code, makes it easier to remember what each register is used for
 
-#define REG_STACK REG_RSI
+#define REG_FRAME REG_RBP
+#define REG_STACK REG_RSP
 #define REG_ARGS  REG_RDI
 #define REG_RET   REG_RAX
-#define REG_TMP1  REG_RDX
-#define REG_TMP2  REG_RCX
+#define REG_TMP1  REG_RSI
+#define REG_TMP2  REG_RDX
+#define REG_TMP3  REG_RCX
 
 #define OBJ_SIZE (int)sizeof(Object*)
 
@@ -77,6 +80,9 @@
 // MOV: *a = imm32 (sign-extended to imm64)
 #define EMIT_MOV64_PTR_IMM32(a, imm) EMIT(REX_W); EMIT(0xc7); EMIT(OP_RM(a)); EMIT_IMM32(imm);
 
+// ADD: *a += b
+#define EMIT_ADD64_PTR_REG(a, b) EMIT(REX_W); EMIT(0x01); EMIT(OP_REG(b) | OP_RM(a));
+
 // ADD: a[off] += b
 #define EMIT_ADD64_OFF8_REG(a, b, off) EMIT(REX_W); EMIT(0x01); EMIT(0x40 |  OP_REG(b) | OP_RM(a)); EMIT(off);
 
@@ -86,8 +92,14 @@
 // ADD: a += imm32
 #define EMIT_ADD64_IMM32(a, i) EMIT(REX_W); EMIT(0x81); EMIT(0xc0 | OP_RM(a)); EMIT_IMM32(i);
 
+// SUB: a -= imm8
+#define EMIT_SUB64_IMM8(a, i) EMIT(REX_W); EMIT(0x83); EMIT(0xc0 | OP_REG(0x5) | OP_RM(a)); EMIT_IMM8(i);
+
+// SUB: *a += b
+#define EMIT_SUB64_PTR_REG(a, b) EMIT(REX_W); EMIT(0x29); EMIT(OP_REG(b) | OP_RM(a));
+
 // SUB: a[off] += b
-#define EMIT_SUB64_OFF8_REG(a, b, off) EMIT(REX_W); EMIT(0x29); EMIT(0x40 |  OP_REG(b) | OP_RM(a)); EMIT(off);
+#define EMIT_SUB64_OFF8_REG(a, b, off) EMIT(REX_W); EMIT(0x29); EMIT(0x40 | OP_REG(b) | OP_RM(a)); EMIT(off);
 
 // NEG: a = -a
 #define EMIT_NEG64(a) EMIT(REX_W); EMIT(0xf7); EMIT(0xc0 | OP_REG(0x3) | OP_RM(a));
@@ -101,24 +113,42 @@
 // CMP: a == *b
 #define EMIT_CMP64_REG_PTR(a, b) EMIT(REX_W); EMIT(0x39); EMIT(OP_REG(a) | OP_RM(b));
 
+// CMP: a == b[off]
+#define EMIT_CMP64_REG_OFF8(a, b, off) EMIT(REX_W); EMIT(0x39); EMIT(0x40 | OP_REG(a) | OP_RM(b)); EMIT_IMM8(off);
+
 // CMP: a == imm8
 #define EMIT_CMP64_REG_IMM8(a, i) EMIT(REX_W); EMIT(0x83); EMIT(0xc0 | OP_REG(0x7) | OP_RM(a)); EMIT_IMM8(i);
 
-// JMP: unconditional jump (Stores a placeholder that's filled in later)
-#define EMIT_JMP_OFF8() EMIT(0xeb); EMIT(0x0);
+// JMP: unconditional jump, imm8 offset (Stores a placeholder that's filled in later)
+#define EMIT_JMP_OFF8() EMIT(0xeb); EMIT_IMM8(0x0);
 
-// JMP: unconditional jump
-// NOTE: does not use a placeholder
-#define EMIT_JMP32() EMIT(0xe9);
+// JMP: unconditional jump, imm32 offset (Stores a placeholder that's filled in later)
+#define EMIT_JMP_OFF32() EMIT(0xe9); EMIT_IMM32(0x0);
 
-// JE: a == b (Stores a placeholder that's filled in later)
+// JMP: unconditional jump, no placeholder
+#define EMIT_JMP_OFF32_NO_PLACEHOLDER() EMIT(0xe9);
+
+// JE: a == b, imm8 offset (Stores a placeholder that's filled in later)
 #define EMIT_JE_OFF8() EMIT(0x74); EMIT(0x0);
+
+// JE: a == b, imm32 offset (Stores a placeholder that's filled in later)
+#define EMIT_JE_OFF32() EMIT(0x0f); EMIT(0x84); EMIT_IMM32(0)
 
 // JL: a < b (Stores a placeholder that's filled in later)
 #define EMIT_JL_OFF8() EMIT(0x7c); EMIT(0x0);
 
 // Patches the jump point
-#define PATCH_JMP8(ptr, off) *(ptr) = off;
+#define PATCH_JMP8(ptr, off) ptr[-1] = off;
+
+// Patches the jump point
+void PATCH_JMP32(uint8_t* ptr, uint32_t off);
 
 // RET
 #define EMIT_RET() EMIT(0xc3);
+
+#define EMIT_PROLOGUE() EMIT_PUSH(REG_RBP); EMIT_MOV64_REG_REG(REG_RBP, REG_RSP)
+
+#define EMIT_EPILOGUE() EMIT_POP(REG_RBP)
+
+#define RESERVE_STACK(size) EMIT_PROLOGUE(); EMIT_SUB64_IMM8(REG_STACK, size);
+#define FREE_STACK(size) EMIT_ADD64_IMM8(REG_STACK, size); EMIT_EPILOGUE();
