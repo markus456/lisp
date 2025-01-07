@@ -41,6 +41,7 @@ bool is_supported_builtin(Function fn)
 }
 
 bool compile_expr(uint8_t** mem, Object* self, Object* params, Object* body);
+bool compile_expr_recurse(uint8_t** mem, Object* self, Object* params, Object* obj, bool can_recurse);
 
 bool is_parameter(Object* params, Object* value)
 {
@@ -325,10 +326,10 @@ bool compile_if(uint8_t** mem, Object* self, Object* params, Object* args)
     EMIT_CMP64_REG_IMM8(REG_RET, (intptr_t)Nil);
     EMIT_JE_OFF32();
     uint8_t* jump_to_false = *mem;
-    compile_expr(mem, self, params, car(cdr(args)));
+    compile_expr_recurse(mem, self, params, car(cdr(args)), true);
     EMIT_JMP_OFF32();
     uint8_t* jump_to_end = *mem;
-    compile_expr(mem, self, params, car(cdr(cdr(args))));
+    compile_expr_recurse(mem, self, params, car(cdr(cdr(args))), true);
     uint8_t* end = *mem;
     PATCH_JMP32(jump_to_false, jump_to_end - jump_to_false);
     PATCH_JMP32(jump_to_end, end - jump_to_end);
@@ -406,7 +407,7 @@ bool compile_call(uint8_t** mem, Object* self, Object* params, Object* func, Obj
     return true;
 }
 
-bool compile_expr(uint8_t** mem, Object* self, Object* params, Object* obj)
+bool compile_expr_recurse(uint8_t** mem, Object* self, Object* params, Object* obj, bool can_recurse)
 {
     switch (get_type(obj))
     {
@@ -416,7 +417,14 @@ bool compile_expr(uint8_t** mem, Object* self, Object* params, Object* obj)
 
             if (fn == self)
             {
-                return compile_recursion(mem, self, params, cdr(obj));
+                if (can_recurse)
+                {
+                    return compile_recursion(mem, self, params, cdr(obj));
+                }
+                else
+                {
+                    error("Cannot compile self-recursion in a non-tail recursive context.");
+                }
             }
             else if (get_type(fn) == TYPE_FUNCTION)
             {
@@ -468,6 +476,11 @@ bool compile_expr(uint8_t** mem, Object* self, Object* params, Object* obj)
     }
 
     return false;
+}
+
+bool compile_expr(uint8_t** mem, Object* self, Object* params, Object* obj)
+{
+    return compile_expr_recurse(mem, self, params, obj, false);
 }
 
 bool generate_bytecode(uint8_t** mem, Object* /*scope*/, Object* /*name*/, Object* self, Object* params, Object* body)
