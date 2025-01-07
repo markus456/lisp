@@ -101,7 +101,11 @@
 (defun mapcar (f lst) (if (eq lst nil) nil (cons (apply f (list (car lst))) (mapcar f (cdr lst)))))
 
 ;; Get the Nth value in a list
-(defun nth (a n) (if (< n 1) (car a) (nth (cdr a) (- n 1))))
+(defun nth (a n) (if (eq a nil)
+                     nil
+                     (if (< n 1)
+                         (car a)
+                         (nth (cdr a) (- n 1)))))
 
 ;; Fill a list with values
 (defun fill (n v) (fill_impl n v nil))
