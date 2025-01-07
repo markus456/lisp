@@ -504,7 +504,12 @@ bool compile_to_bytecode(Object* scope, Object* name, Object* self, Object* para
             int pid = getpid();
             char buffer[1024];
             snprintf(buffer, sizeof(buffer), "gdb --pid=%d --batch --silent -ex 'disassemble /r %p,%p'", pid, memory, ptr);
+
+            printf("BEGIN dump of '%s'\n", get_symbol(name));
+            fflush(stdout);
             system(buffer);
+            printf("END dump of '%s'\n", get_symbol(name));
+            fflush(stdout);
         }
 
         get_obj(self)->compiled = COMPILE_CODE;
@@ -548,7 +553,8 @@ bool compile_function(Object* scope, Object* args, CompileFunc compile_func, uin
                 name = eval(scope, name);
             }
 
-            debug("<<< Compiling '%s' >>>", get_symbol(name));
+            debug("<<< %s '%s' >>>", compile_level == COMPILE_CODE ? "Compiling": "Resolving symbols for",
+                  get_symbol(name));
 
             func = symbol_lookup(scope, name);
 
