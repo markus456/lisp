@@ -190,6 +190,480 @@ void jit_free()
     }
 }
 
+// A single statement (if, eq, +) turns into bytecode that has multiple
+// parts. Thus, one function is transformed one bite (pun intended) at a time
+// into bytecode that then goes through (eventually) optimization and finally
+// gets transformed into machine code.
+struct Bite
+{
+    char  id;
+    int   ver;
+    int   op;
+    bool  printed;
+    struct Bite* arg1;
+    struct Bite* arg2;
+};
+
+typedef struct Bite Bite;
+
+enum BiteType {
+    OP_CONSTANT,
+    OP_PARAMETER,
+    OP_ADD,
+    OP_SUB,
+    OP_NEG,
+    OP_LESS,
+    OP_EQ,
+    OP_PTR,
+    OP_IF,
+    OP_BRANCH,
+    OP_LIST,
+    OP_RECURSE,
+    OP_CALL,
+};
+
+char bite_ids = 'a';
+
+Bite* make_bite(Bite** bites, char id, int ver)
+{
+    Bite* rv = *bites;
+    *bites = rv + 1;
+
+    if (id == 0)
+    {
+        rv->id = bite_ids++;
+        rv->ver = 0;
+    }
+    else if (ver != -1)
+    {
+        rv->id = id;
+        rv->ver = ver + 1;
+    }
+
+    rv->printed = false;
+    return rv;
+}
+
+Bite* bite_expr(Bite** bites, Object* self, Object* params, Object* obj);
+
+Bite* bite_argument(Bite** bites, Object* params, Object* arg)
+{
+    uint8_t i = 0;
+
+    while (params != Nil)
+    {
+        if (car(params) == arg)
+        {
+            break;
+        }
+
+        i++;
+        params = cdr(params);
+    }
+
+    if (params == Nil)
+    {
+        assert(arg != Nil);
+        error("Unknown parameter.");
+        return false;
+    }
+
+    Bite* b = make_bite(bites, 0, 0);
+    b->op = OP_PARAMETER;
+    b->arg1 = (Bite*)(intptr_t)(i * OBJ_SIZE);
+    return b;
+}
+
+Bite* bite_immediate(Bite** bites, Object* arg)
+{
+    Bite* b = make_bite(bites, 0, 0);
+    b->op = OP_CONSTANT;
+    b->arg1 = (Bite*)arg;
+    return b;
+}
+
+Bite* bite_recursion(Bite** bites, Object* self, Object* params, Object* args)
+{
+    Bite* arglist = NULL;
+
+    for (; args != Nil; args = cdr(args))
+    {
+        Bite* list = make_bite(bites, -1, -1);
+        list->op = OP_LIST;
+        list->arg1 = bite_expr(bites, self, params, car(args));
+        list->arg2 = arglist;
+        arglist = list;
+    }
+
+    Bite* rec = make_bite(bites, 0, 0);
+    rec->op = OP_RECURSE;
+    rec->arg1 = arglist;
+    return rec;
+}
+
+Bite* bite_call(Bite** bites, Object* self, Object* params, Object* func, Object* args)
+{
+    Bite* arglist = NULL;
+
+    for (; args != Nil; args = cdr(args))
+    {
+        Bite* list = make_bite(bites, -1, -1);
+        list->op = OP_LIST;
+        list->arg1 = bite_expr(bites, self, params, car(args));
+        list->arg2 = arglist;
+        arglist = list;
+    }
+
+    Bite* call = make_bite(bites, 0, 0);
+    call->op = OP_CALL;
+    call->arg1 = arglist;
+    call->arg2 = (Bite*)func_body(func);
+    return call;
+}
+
+Bite* bite_add(Bite** bites, Object* self, Object* params, Object* args)
+{
+    int num_args = length(args);
+
+    if (num_args == 0)
+    {
+        return bite_immediate(bites, 0);
+    }
+    else if (num_args == 1)
+    {
+        return bite_expr(bites, self, params, car(args));
+    }
+
+    Bite* lhs = bite_expr(bites, self, params, car(args));
+    char id = 0;
+    int ver = 0;
+
+    for (args = cdr(args); args != Nil; args = cdr(args))
+    {
+        Bite* rhs = bite_expr(bites, self, params, car(args));
+        Bite* add = make_bite(bites, id, ver);
+        add->op = OP_ADD;
+        add->arg1 = lhs;
+        add->arg2 = rhs;
+        id = add->id;
+        ver = add->ver;
+        lhs = add;
+    }
+
+    assert(lhs);
+    return lhs;
+}
+
+Bite* bite_sub(Bite** bites, Object* self, Object* params, Object* args)
+{
+    int num_args = length(args);
+
+    if (num_args == 1)
+    {
+        Bite* b = bite_expr(bites, self, params, car(args));
+        Bite* neg = make_bite(bites, b->id, b->ver);
+        neg->op = OP_NEG;
+        neg->arg1 = b;
+        return neg;
+    }
+
+    Bite* lhs = bite_expr(bites, self, params, car(args));
+    char id = 0;
+    int ver = 0;
+
+    for (args = cdr(args); args != Nil; args = cdr(args))
+    {
+        Bite* rhs = bite_expr(bites, self, params, car(args));
+        Bite* sub = make_bite(bites, id, ver);
+        sub->op = OP_SUB;
+        sub->arg1 = lhs;
+        sub->arg2 = rhs;
+        id = sub->id;
+        ver = sub->ver;
+        lhs = sub;
+    }
+
+    assert(lhs);
+    return lhs;
+}
+
+Bite* bite_less(Bite** bites, Object* self, Object* params, Object* args)
+{
+    Bite* lhs = bite_expr(bites, self, params, car(args));
+    Bite* rhs = bite_expr(bites, self, params, car(cdr(args)));
+    Bite* less = make_bite(bites, 0, 0);
+    less->op = OP_LESS;
+    less->arg1 = lhs;
+    less->arg2 = rhs;
+    return less;
+
+}
+
+Bite* bite_eq(Bite** bites, Object* self, Object* params, Object* args)
+{
+    Bite* lhs = bite_expr(bites, self, params, car(args));
+    Bite* rhs = bite_expr(bites, self, params, car(cdr(args)));
+    Bite* less = make_bite(bites, 0, 0);
+    less->op = OP_EQ;
+    less->arg1 = lhs;
+    less->arg2 = rhs;
+    return less;
+}
+
+Bite* bite_car(Bite** bites, Object* self, Object* params, Object* args)
+{
+    Bite* val = bite_expr(bites, self, params, car(args));
+    Bite* b = make_bite(bites, val->id, val->ver);
+    b->op = OP_PTR;
+    b->arg1 = val;
+    b->arg2 = (Bite*)(-TYPE_CELL + offsetof(Object, car));
+    return b;
+}
+
+Bite* bite_cdr(Bite** bites, Object* self, Object* params, Object* args)
+{
+    Bite* val = bite_expr(bites, self, params, car(args));
+    Bite* b = make_bite(bites, val->id, val->ver);
+    b->op = OP_PTR;
+    b->arg1 = val;
+    b->arg2 = (Bite*)(-TYPE_CELL + offsetof(Object, cdr));
+    return b;
+}
+
+Bite* bite_if(Bite** bites, Object* self, Object* params, Object* args)
+{
+    Bite* cond = bite_expr(bites, self, params, car(args));
+    Bite* if_true = bite_expr(bites, self, params, car(cdr(args)));
+    Bite* if_false = bite_expr(bites, self, params, car(cdr(cdr(args))));
+    Bite* branch = make_bite(bites, -1, -1);
+    branch->op = OP_BRANCH;
+    branch->arg1 = if_true;
+    branch->arg2 = if_false;
+    Bite* if_bite = make_bite(bites, branch->id, branch->ver);
+    if_bite->op = OP_IF;
+    if_bite->arg1 = cond;
+    if_bite->arg2 = branch;
+    return if_bite;
+}
+
+Bite* bite_expr(Bite** bites, Object* self, Object* params, Object* obj)
+{
+    switch (get_type(obj))
+    {
+    case TYPE_CELL:
+        {
+            Object* fn = car(obj);
+
+            if (fn == self)
+            {
+                return bite_recursion(bites, self, params, cdr(obj));
+            }
+            else if (get_type(fn) == TYPE_FUNCTION)
+            {
+                return bite_call(bites, self, params, fn, cdr(obj));
+            }
+            else if (get_obj(fn)->fn == builtin_add)
+            {
+                return bite_add(bites, self, params, cdr(obj));
+            }
+            else if (get_obj(fn)->fn == builtin_sub)
+            {
+                return bite_sub(bites, self, params, cdr(obj));
+            }
+            else if (get_obj(fn)->fn == builtin_less)
+            {
+                return bite_less(bites, self, params, cdr(obj));
+            }
+            else if (get_obj(fn)->fn == builtin_eq)
+            {
+                return bite_eq(bites, self, params, cdr(obj));
+            }
+            else if (get_obj(fn)->fn == builtin_car)
+            {
+                return bite_car(bites, self, params, cdr(obj));
+            }
+            else if (get_obj(fn)->fn == builtin_cdr)
+            {
+                return bite_cdr(bites, self, params, cdr(obj));
+            }
+            else if (get_obj(fn)->fn == builtin_if)
+            {
+                return bite_if(bites, self, params, cdr(obj));
+            }
+            else
+            {
+                error("Unknown builtin function");
+            }
+            break;
+        }
+    case TYPE_SYMBOL:
+        return bite_argument(bites, params, obj);
+
+    case TYPE_CONST:
+    case TYPE_NUMBER:
+        return bite_immediate(bites, obj);
+
+    default:
+        return bite_immediate(bites, Nil);
+    }
+
+    assert(!true);
+    return bite_immediate(bites, Undefined);
+}
+
+void print_one_bitecode(Bite* bite)
+{
+    if (bite->printed)
+    {
+        return;
+    }
+
+    switch (bite->op)
+    {
+    case OP_CONSTANT:
+        printf("%c%d = 0x%lx\n", bite->id, bite->ver, (intptr_t)bite->arg1);
+        break;
+    case OP_PARAMETER:
+        printf("%c%d = args[%ld]\n", bite->id, bite->ver, (intptr_t)bite->arg1);
+        break;
+    case OP_ADD:
+        print_one_bitecode(bite->arg1);
+        print_one_bitecode(bite->arg2);
+        printf("%c%d = %c%d + %c%d\n", bite->id, bite->ver, bite->arg1->id, bite->arg1->ver, bite->arg2->id, bite->arg2->ver);
+        break;
+    case OP_SUB:
+        print_one_bitecode(bite->arg1);
+        print_one_bitecode(bite->arg2);
+        printf("%c%d = %c%d - %c%d\n", bite->id, bite->ver, bite->arg1->id, bite->arg1->ver, bite->arg2->id, bite->arg2->ver);
+        break;
+    case OP_NEG:
+        print_one_bitecode(bite->arg1);
+        printf("%c%d = -%c%d\n", bite->id, bite->ver, bite->arg1->id, bite->arg1->ver);
+        break;
+    case OP_LESS:
+        print_one_bitecode(bite->arg1);
+        print_one_bitecode(bite->arg2);
+        printf("%c%d = %c%d < %c%d\n", bite->id, bite->ver, bite->arg1->id, bite->arg1->ver, bite->arg2->id, bite->arg2->ver);
+        break;
+    case OP_EQ:
+        print_one_bitecode(bite->arg1);
+        print_one_bitecode(bite->arg2);
+        printf("%c%d = %c%d == %c%d\n", bite->id, bite->ver, bite->arg1->id, bite->arg1->ver, bite->arg2->id, bite->arg2->ver);
+        break;
+    case OP_PTR:
+        print_one_bitecode(bite->arg1);
+        printf("%c%d = %c%d[%ld]\n", bite->id, bite->ver, bite->arg1->id, bite->arg1->ver, (intptr_t)bite->arg2);
+        break;
+    case OP_IF:
+        print_one_bitecode(bite->arg1);
+        print_one_bitecode(bite->arg2->arg1);
+        print_one_bitecode(bite->arg2->arg2);
+        assert(bite->arg2->op == OP_BRANCH);
+        printf("%c%d = %c%d ? %c%d : %c%d\n", bite->id, bite->ver, bite->arg1->id, bite->arg1->ver,
+               bite->arg2->arg1->id, bite->arg2->arg1->ver,bite->arg2->arg2->id, bite->arg2->arg2->ver);
+        break;
+
+    case OP_RECURSE:
+        for (Bite* b = bite->arg1; b; b = b->arg2)
+        {
+            print_one_bitecode(b->arg1);
+        }
+
+        printf("%c%d = recurse(", bite->id, bite->ver);
+
+        for (Bite* b = bite->arg1; b; b = b->arg2)
+        {
+            printf("%c%d", b->arg1->id, b->arg1->ver);
+
+            if (b->arg2)
+            {
+                printf(", ");
+            }
+        }
+
+        printf(")\n");
+        break;
+    case OP_CALL:
+        for (Bite* b = bite->arg1; b; b = b->arg2)
+        {
+            print_one_bitecode(b->arg1);
+        }
+
+        printf("%c%d = call(", bite->id, bite->ver);
+
+        for (Bite* b = bite->arg1; b; b = b->arg2)
+        {
+            printf("%c%d", b->arg1->id, b->arg1->ver);
+
+            if (b->arg2)
+            {
+                printf(", ");
+            }
+        }
+
+        printf(")\n");
+        break;
+
+    case OP_BRANCH:
+    case OP_LIST:
+    default:
+        assert(false);
+    }
+
+    bite->printed = true;
+}
+
+void mark_unprinted(Bite* bite)
+{
+    bite->printed = false;
+
+    switch (bite->op)
+    {
+    case OP_CONSTANT:
+    case OP_PARAMETER:
+        break;
+
+    case OP_ADD:
+    case OP_SUB:
+    case OP_LESS:
+    case OP_EQ:
+        mark_unprinted(bite->arg1);
+        mark_unprinted(bite->arg2);
+        break;
+
+    case OP_NEG:
+    case OP_PTR:
+        mark_unprinted(bite->arg1);
+        break;
+
+    case OP_IF:
+        mark_unprinted(bite->arg1);
+        mark_unprinted(bite->arg2->arg1);
+        mark_unprinted(bite->arg2->arg2);
+        break;
+
+    case OP_RECURSE:
+    case OP_CALL:
+        for (Bite* b = bite->arg1; b; b = b->arg2)
+        {
+            mark_unprinted(b->arg1);
+        }
+        break;
+
+    case OP_BRANCH:
+    case OP_LIST:
+    default:
+        assert(false);
+    }
+}
+
+
+void print_bitecode(Bite* bite)
+{
+    mark_unprinted(bite);
+    print_one_bitecode(bite);
+}
+
 bool compile_argument(uint8_t** mem, Object* params, Object* arg)
 {
     uint8_t i = 0;
@@ -485,6 +959,18 @@ bool compile_expr(uint8_t** mem, Object* self, Object* params, Object* obj)
 
 bool generate_bytecode(uint8_t** mem, Object* /*scope*/, Object* /*name*/, Object* self, Object* params, Object* body)
 {
+    Bite bitecode[1024];
+    Bite* ptr = bitecode;
+    bite_ids = 'a';
+    num_variables = 0;
+    Bite* res = bite_expr(&ptr, self, params, body);
+
+    if (debug_on())
+    {
+        debug("Generated %ld bites, resulting variable is: %c%d.\n", ptr - bitecode, res->id, res->ver);
+        print_bitecode(res);
+    }
+
     bool ok = compile_expr(mem, self, params, body);
     EMIT_RET();
     return ok;
