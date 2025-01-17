@@ -158,6 +158,8 @@ Object* func_params(Object* obj);
 Object* func_body(Object* obj);
 Object* symbol_lookup(Object* scope, Object* sym);
 Object* make_ptr(Object* obj, enum Type type);
+Object* make_number(int64_t val);
+int64_t get_number(Object* obj);
 void bind_value(Object* scope, Object* symbol, Object* value);
 Object* car(Object* obj);
 Object* cdr(Object* obj);

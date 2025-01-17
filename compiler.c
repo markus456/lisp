@@ -1044,6 +1044,110 @@ bool compile_expr(uint8_t** mem, Object* self, Object* params, Object* obj)
     return compile_expr_recurse(mem, self, params, obj, false);
 }
 
+Bite* fold_constants(Bite* bite);
+
+Bite* compile_time_add(Bite* arg1, Bite* arg2)
+{
+    Object* lhs = (Object*)arg1->arg1;
+    Object* rhs = (Object*)arg2->arg1;
+    Object* result = make_number(get_number(lhs) + get_number(rhs));
+
+    debug("Compile time add: %c%d + %c%d => %p + %p = %p",
+          arg1->id, arg1->ver, arg2->id, arg2->ver,
+          lhs, rhs, result);
+
+    arg1->arg1 = (Bite*)result;
+    return arg1;
+}
+
+Bite* optimize_add(Bite* add, bool* optimized)
+{
+    debug("ADD: %c%d", add->id, add->ver);
+
+    if (add->arg1->op == OP_CONSTANT && add->arg2->op == OP_CONSTANT)
+    {
+        add = compile_time_add(add->arg1, add->arg2);
+        *optimized = true;
+    }
+    else if (add->arg1->op == OP_ADD && add->arg2->op == OP_CONSTANT)
+    {
+        bool found = false;
+
+        for (Bite* b = add->arg1; !found && b->op == OP_ADD; b = b->arg1)
+        {
+            if (b->arg2->op == OP_CONSTANT)
+            {
+                add = compile_time_add(add->arg2, b->arg2);
+                *optimized = true;
+                break;
+            }
+            else if (b->arg1->op == OP_CONSTANT)
+            {
+                add = compile_time_add(add->arg1, b->arg2);
+                *optimized = true;
+                break;
+            }
+        }
+    }
+
+    return add;
+}
+
+Bite* fold_constants(Bite* bite)
+{
+    bool optimized = false;
+    switch (bite->op)
+    {
+    case OP_CONSTANT:
+    case OP_PARAMETER:
+        break;
+
+    case OP_ADD:
+        do
+        {
+            optimized = false;
+            bite->arg1 = fold_constants(bite->arg1);
+            bite->arg2 = fold_constants(bite->arg2);
+            bite = optimize_add(bite, &optimized);
+        }
+        while (optimized && bite->op == OP_ADD);
+        break;
+
+    case OP_SUB:
+    case OP_LESS:
+    case OP_EQ:
+        bite->arg1 = fold_constants(bite->arg1);
+        bite->arg2 = fold_constants(bite->arg2);
+        break;
+
+    case OP_NEG:
+    case OP_PTR:
+        bite->arg1 = fold_constants(bite->arg1);
+        break;
+
+    case OP_IF:
+        bite->arg1 = fold_constants(bite->arg1);
+        bite->arg2->arg1 = fold_constants(bite->arg2->arg1);
+        bite->arg2->arg2 = fold_constants(bite->arg2->arg2);
+        break;
+
+    case OP_RECURSE:
+    case OP_CALL:
+        for (Bite* b = bite->arg1; b; b = b->arg2)
+        {
+            b->arg1 = fold_constants(b->arg1);
+        }
+        break;
+
+    case OP_BRANCH:
+    case OP_LIST:
+    default:
+        assert(false);
+    }
+
+    return bite;
+}
+
 
 Bite* temporaries[128];
 
@@ -1252,6 +1356,14 @@ bool generate_bytecode(uint8_t** mem, Object* /*scope*/, Object* /*name*/, Objec
     if (debug_on())
     {
         debug("Generated %ld bites, resulting variable is: %c%d.\n", ptr - bitecode, res->id, res->ver);
+        print_bitecode(res);
+    }
+
+    res = fold_constants(res);
+
+    if (debug_on())
+    {
+        debug("After constant folding");
         print_bitecode(res);
     }
 
