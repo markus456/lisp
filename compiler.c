@@ -200,7 +200,8 @@ struct Bite
     int   ver;
     int   op;
     bool  printed;
-    char  reg[32];
+    int   reg;
+
     struct Bite* arg1;
     struct Bite* arg2;
 };
@@ -241,7 +242,7 @@ Bite* make_bite(Bite** bites, char id, int ver)
         rv->ver = ver + 1;
     }
 
-    rv->reg[0] = 0;
+    rv->reg = -1;
     rv->printed = false;
     return rv;
 }
@@ -513,49 +514,63 @@ Bite* bite_expr(Bite** bites, Object* self, Object* params, Object* obj)
     return bite_immediate(bites, Undefined);
 }
 
+void print_fixed(const char* fmt, ...)
+{
+    char buf[20];
+    memset(buf, ' ', sizeof(buf));
+    buf[sizeof(buf) - 1] = 0;
+    va_list args;
+    va_start(args, fmt);
+    int n = vsnprintf(buf, sizeof(buf) - 1, fmt, args);
+    assert(n < (int)sizeof(buf));
+    buf[n] = ' ';
+    va_end(args);
+    printf("%s", buf);
+}
+
 void print_bite_constant(Bite* bite)
 {
-    printf("%c%d = 0x%lx", bite->id, bite->ver, (intptr_t)bite->arg1);
+    print_fixed("%c%d = 0x%lx", bite->id, bite->ver, (intptr_t)bite->arg1);
 }
 
 void print_bite_parameter(Bite* bite)
 {
-    printf("%c%d = args[%ld]", bite->id, bite->ver, (intptr_t)bite->arg1);
+    print_fixed("%c%d = args[%ld]", bite->id, bite->ver, (intptr_t)bite->arg1);
 }
 
 void print_bite_add(Bite* bite)
 {
-    printf("%c%d = %c%d + %c%d", bite->id, bite->ver, bite->arg1->id, bite->arg1->ver, bite->arg2->id, bite->arg2->ver);
+    print_fixed("%c%d = %c%d + %c%d", bite->id, bite->ver, bite->arg1->id, bite->arg1->ver, bite->arg2->id, bite->arg2->ver);
 }
 
 void print_bite_sub(Bite* bite)
 {
-    printf("%c%d = %c%d - %c%d", bite->id, bite->ver, bite->arg1->id, bite->arg1->ver, bite->arg2->id, bite->arg2->ver);
+    print_fixed("%c%d = %c%d - %c%d", bite->id, bite->ver, bite->arg1->id, bite->arg1->ver, bite->arg2->id, bite->arg2->ver);
 }
 
 void print_bite_neg(Bite* bite)
 {
-    printf("%c%d = -%c%d", bite->id, bite->ver, bite->arg1->id, bite->arg1->ver);
+    print_fixed("%c%d = -%c%d", bite->id, bite->ver, bite->arg1->id, bite->arg1->ver);
 }
 
 void print_bite_less(Bite* bite)
 {
-    printf("%c%d = %c%d < %c%d", bite->id, bite->ver, bite->arg1->id, bite->arg1->ver, bite->arg2->id, bite->arg2->ver);
+    print_fixed("%c%d = %c%d < %c%d", bite->id, bite->ver, bite->arg1->id, bite->arg1->ver, bite->arg2->id, bite->arg2->ver);
 }
 
 void print_bite_eq(Bite* bite)
 {
-    printf("%c%d = %c%d == %c%d", bite->id, bite->ver, bite->arg1->id, bite->arg1->ver, bite->arg2->id, bite->arg2->ver);
+    print_fixed("%c%d = %c%d == %c%d", bite->id, bite->ver, bite->arg1->id, bite->arg1->ver, bite->arg2->id, bite->arg2->ver);
 }
 
 void print_bite_ptr(Bite* bite)
 {
-    printf("%c%d = %c%d[%ld]", bite->id, bite->ver, bite->arg1->id, bite->arg1->ver, (intptr_t)bite->arg2);
+    print_fixed("%c%d = %c%d[%ld]", bite->id, bite->ver, bite->arg1->id, bite->arg1->ver, (intptr_t)bite->arg2);
 }
 
 void print_bite_if(Bite* bite)
 {
-    printf("%c%d = %c%d ? %c%d : %c%d", bite->id, bite->ver, bite->arg1->id, bite->arg1->ver,
+    print_fixed("%c%d = %c%d ? %c%d : %c%d", bite->id, bite->ver, bite->arg1->id, bite->arg1->ver,
            bite->arg2->arg1->id, bite->arg2->arg1->ver,bite->arg2->arg2->id, bite->arg2->arg2->ver);
 }
 
@@ -1153,61 +1168,37 @@ Bite* temporaries[128];
 
 void add_temp(Bite* bite)
 {
+    ptrdiff_t num = 0;
     Bite** b = temporaries;
 
-    if (bite->op == OP_CONSTANT)
+    while (b[num])
     {
-        sprintf(bite->reg, "const");
-        return;
-    }
-
-    while (*b)
-    {
-        if (*b == bite)
+        if (b[num] == bite)
         {
+            debug("Already in use: %c%d", bite->id, bite->ver);
             return;
         }
 
-        b++;
+        num++;
     }
 
-    ptrdiff_t num = b - temporaries;
+    bite->reg = num;
 
-    switch (num)
-    {
-    case 0:
-        sprintf(bite->reg, "rax");
-        break;
-    case 1:
-        sprintf(bite->reg, "rsi");
-        break;
-    case 2:
-        sprintf(bite->reg, "rdx");
-        break;
-    case 3:
-        sprintf(bite->reg, "rcx");
-        break;
-    default:
-        sprintf(bite->reg, "rbp[-%ld]", (num - 3) * 8);
-        break;
-    }
+    debug("Allocated: %c%d to slot %d", bite->id, bite->ver, bite->reg);
 
-    *b = bite;
+    b[num] = bite;
 }
 
 void remove_temp(Bite* bite)
 {
     Bite** b = temporaries;
 
-    if (bite->op == OP_CONSTANT)
-    {
-        return;
-    }
-
     while (*b)
     {
         if (*b == bite)
         {
+            debug("Free: %c%d from slot %d", bite->id, bite->ver, bite->reg);
+
             Bite** out = b++;
 
             while (*b)
@@ -1221,8 +1212,25 @@ void remove_temp(Bite* bite)
 
         b++;
     }
+}
 
-    *b = bite;
+const char* reg_name(int reg)
+{
+    switch (reg)
+    {
+    case 0:
+        return "rax";
+    case 1:
+        return "rsi";
+    case 2:
+        return "rdx";
+    case 3:
+        return "rcx";
+    }
+
+    static char buffer[64];
+    sprintf(buffer, "temp@%d", reg);
+    return buffer;
 }
 
 void analyze_liveness(Bite* bite, Bite** live_ones)
@@ -1240,57 +1248,69 @@ void analyze_liveness(Bite* bite, Bite** live_ones)
         }
     }
 
-    char buf[1024] = {0};
-    char tmp[128];
-
-    strcat(buf, "< ");
-    for (Bite** b = temporaries; *b; b++)
+    if (bite->op != OP_CONSTANT && bite->op != OP_PARAMETER)
     {
-        sprintf(tmp, "%s = %c%d ", (*b)->reg, (*b)->id, (*b)->ver);
-        strcat(buf, tmp);
+        add_temp(bite);
     }
 
-    strcat(buf, ">");
+    print_bite_norecurse(bite);
+
+    printf(" | { ");
+    for (Bite** b = live_ones; *b; b++)
+    {
+        printf("%c%d%s ", (*b)->id, (*b)->ver, (*b == bite ? "+" : ""));
+    }
+    printf(" -> ");
+
+    for (Bite** b = variables; *b; b++)
+    {
+        printf("%c%d ", (*b)->id, (*b)->ver);
+    }
+
+    printf("} ");
+
+    for (Bite** b = temporaries; *b; b++)
+    {
+        printf("%s = %c%d ", reg_name((*b)->reg), (*b)->id, (*b)->ver);
+    }
+
+    printf("\n");
 
     switch (bite->op)
     {
     case OP_CONSTANT:
     case OP_PARAMETER:
         break;
+
     case OP_ADD:
     case OP_SUB:
     case OP_LESS:
     case OP_EQ:
-        add_temp(bite->arg1);
-        add_temp(bite->arg2);
         *ptr++ = bite->arg1;
         analyze_liveness(bite->arg1, variables);
+        remove_temp(bite->arg1);
+
         *ptr++ = bite->arg2;
         analyze_liveness(bite->arg2, variables);
-        remove_temp(bite->arg1);
         remove_temp(bite->arg2);
         break;
 
     case OP_NEG:
     case OP_PTR:
-        add_temp(bite->arg1);
         *ptr++ = bite->arg1;
         analyze_liveness(bite->arg1, variables);
         remove_temp(bite->arg1);
         break;
 
     case OP_IF:
-        add_temp(bite->arg1);
         *ptr = bite->arg1;
         analyze_liveness(bite->arg1, variables);
         remove_temp(bite->arg1);
 
-        add_temp(bite->arg2->arg1);
         *ptr = bite->arg2->arg1;
         analyze_liveness(bite->arg2->arg1, variables);
         remove_temp(bite->arg2->arg1);
 
-        add_temp(bite->arg2->arg2);
         *ptr = bite->arg2->arg2;
         analyze_liveness(bite->arg2->arg2, variables);
         remove_temp(bite->arg2->arg2);
@@ -1300,11 +1320,6 @@ void analyze_liveness(Bite* bite, Bite** live_ones)
 
     case OP_RECURSE:
     case OP_CALL:
-        for (Bite* b = bite->arg1; b; b = b->arg2)
-        {
-            add_temp(b);
-        }
-
         for (Bite* b = bite->arg1; b; b = b->arg2)
         {
             *ptr++ = b->arg1;
@@ -1322,28 +1337,6 @@ void analyze_liveness(Bite* bite, Bite** live_ones)
     default:
         assert(false);
     }
-
-    print_bite_norecurse(bite);
-
-    printf(" | in { ");
-    for (Bite** b = live_ones; *b; b++)
-    {
-        printf("%c%d%s ", (*b)->id, (*b)->ver, (*b == bite ? "+" : ""));
-    }
-    printf("} out {");
-
-    for (Bite** b = variables; *b; b++)
-    {
-        printf("%c%d ", (*b)->id, (*b)->ver);
-    }
-
-    printf("} union {");
-    *ptr++ = bite;
-    for (Bite** b = variables; *b; b++)
-    {
-        printf("%c%d ", (*b)->id, (*b)->ver);
-    }
-    printf("} %s\n", buf);
 }
 
 bool generate_bytecode(uint8_t** mem, Object* /*scope*/, Object* /*name*/, Object* self, Object* params, Object* body)
@@ -1372,6 +1365,7 @@ bool generate_bytecode(uint8_t** mem, Object* /*scope*/, Object* /*name*/, Objec
     add_temp(res);
     Bite* live_ones[2] = {res, NULL};
     analyze_liveness(res, live_ones);
+    remove_temp(res);
     debug("ANALYZE LIVENESS END");
 
     bool ok = compile_expr(mem, self, params, body);
