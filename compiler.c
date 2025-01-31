@@ -6,6 +6,8 @@
 
 #define COMPILE_MEM_SIZE 4096
 
+#define MAX(a, b) (a > b ? a : b)
+
 struct CompiledFunction
 {
     void* memory;
@@ -85,7 +87,10 @@ Object* resolve_one_symbol(Object* scope, Object* name, Object* self, Object* pa
 
 bool resolve_symbols(Object* scope, Object* name, Object* self, Object* params, Object* body)
 {
-    assert(get_type(body) == TYPE_CELL);
+    if (get_type(body) != TYPE_CELL)
+    {
+        return true;
+    }
 
     for (; body != Nil; body = cdr(body))
     {
@@ -200,6 +205,7 @@ struct Bite
     int   op;
     bool  printed;
     int   reg;
+    int   reg_count;
 
     struct Bite* arg1;
     struct Bite* arg2;
@@ -254,6 +260,7 @@ Bite* make_bite(Bite** bites)
     *output = 0;
 
     rv->reg = -1;
+    rv->reg_count = 0;
     rv->printed = false;
     return rv;
 }
@@ -1065,6 +1072,258 @@ bool compile_expr(uint8_t** mem, Object* self, Object* params, Object* obj)
     return compile_expr_recurse(mem, self, params, obj, false);
 }
 
+//
+// Bite compilation to machine code
+//
+
+#define TEMP_REGISTERS 4
+#define LAST_TEMP_REGISTER TEMP_REGISTERS - 1
+
+int get_register(Bite* bite)
+{
+    switch (bite->reg)
+    {
+    case 0:
+        return REG_RET;
+    case 1:
+        return REG_TMP1;
+    case 2:
+        return REG_TMP2;
+    case 3:
+        return REG_TMP3;
+    default:
+        assert(false);
+        break;
+    }
+
+    return -1;
+}
+
+bool is_argument(Bite* bite)
+{
+    return bite->op == OP_PARAMETER;
+}
+
+intptr_t get_constant(Bite* bite)
+{
+    return (intptr_t)bite->arg1;
+}
+
+int get_temp_offset(int tmp)
+{
+    return (tmp + 1) * -8;
+}
+
+struct RegList
+{
+    int reg[4];
+    int size;
+};
+
+typedef struct RegList RegList;
+
+RegList* reglist;
+int temps = 0;
+
+RegList* reglist_push(RegList* dest, int reg)
+{
+    assert(reg >= 0);
+    assert(reglist->size > 0);
+    memcpy(dest, reglist, sizeof(*reglist));
+
+    for (int i = 0; i < dest->size; i++)
+    {
+        if (dest->reg[i] == reg)
+        {
+            for (int j = i + 1; j < dest->size; j++)
+            {
+                dest->reg[j - 1] = dest->reg[j];
+            }
+
+            break;
+        }
+    }
+
+    dest->size--;
+    RegList* prev = reglist;
+    reglist = dest;
+
+    if (debug_on())
+    {
+        printf("Removed register %d: [", reg);
+
+        for (int i = 0; i < prev->size; i++)
+        {
+            printf(" %d", prev->reg[i]);
+        }
+
+        printf(" ] [");
+
+        for (int i = 0; i < reglist->size; i++)
+        {
+            printf(" %d", reglist->reg[i]);
+        }
+
+        printf(" ]\n");
+    }
+
+    return prev;
+}
+
+void reglist_pop(RegList* list)
+{
+    reglist = list;
+}
+
+bool bite_compile(uint8_t** mem, Bite* bite);
+
+bool bite_compile_constant(uint8_t** mem, Bite* bite)
+{
+    bite->reg = reglist->reg[0];
+    debug("%s takes register %d", bite->id, bite->reg);
+    EMIT_MOV64_REG_IMM64(get_register(bite), get_constant(bite));
+    return true;
+}
+
+bool bite_compile_argument(uint8_t** mem, Bite* bite)
+{
+    bite->reg = reglist->reg[0];
+    debug("%s takes register %d", bite->id, bite->reg);
+    EMIT_MOV64_REG_OFF8(get_register(bite), REG_ARGS, get_constant(bite));
+    return true;
+}
+
+bool bite_compile_add(uint8_t** mem, Bite* bite)
+{
+    Bite* lhs = bite->arg1;
+    Bite* rhs = bite->arg2;
+
+    // Constant should've been folded by now
+    assert(lhs->op != OP_CONSTANT || rhs->op != OP_CONSTANT);
+
+    if (rhs->reg_count == 0)
+    {
+        if (!bite_compile(mem, lhs))
+        {
+            return false;
+        }
+
+        if (is_argument(rhs))
+        {
+            EMIT_ADD64_REG_OFF8(get_register(lhs), REG_ARGS, get_constant(rhs));
+        }
+        else
+        {
+            // TODO: deal with larger than 32-bit constants
+            assert(get_constant(rhs) < 0xffffffff);
+            EMIT_ADD64_IMM32(get_register(lhs), get_constant(rhs));
+        }
+
+        bite->reg = lhs->reg;
+        debug("%s uses register %d from %s", bite->id, bite->reg, lhs->id);
+    }
+    else if (rhs->reg_count <= lhs->reg_count && rhs->reg_count < reglist->size)
+    {
+        if (!bite_compile(mem, lhs))
+        {
+            return false;
+        }
+
+
+        RegList r;
+        RegList* prev = reglist_push(&r, lhs->reg);
+
+        if (!bite_compile(mem, rhs))
+        {
+            return false;
+        }
+
+        reglist_pop(prev);
+
+        assert(rhs->reg != lhs->reg);
+        EMIT_ADD64_REG_REG(get_register(lhs), get_register(rhs));
+        bite->reg = lhs->reg;
+        debug("%s uses register %d from %s", bite->id, bite->reg, lhs->id);
+    }
+    else if (rhs->reg_count > lhs->reg_count && lhs->reg_count < reglist->size)
+    {
+        if (!bite_compile(mem, rhs))
+        {
+            return false;
+        }
+
+        RegList r;
+        RegList* prev = reglist_push(&r, rhs->reg);
+
+        if (!bite_compile(mem, lhs))
+        {
+            return false;
+        }
+
+        reglist_pop(prev);
+
+        assert(rhs->reg != lhs->reg);
+        EMIT_ADD64_REG_REG(get_register(rhs), get_register(lhs));
+        bite->reg = rhs->reg;
+        debug("%s uses register %d from %s", bite->id, bite->reg, rhs->id);
+    }
+    else
+    {
+        // Spill to memory
+        assert(rhs->reg_count >= reglist->size && lhs->reg_count >= reglist->size);
+
+        if (!bite_compile(mem, rhs))
+        {
+            return false;
+        }
+
+        int temp = temps++;
+        assert(get_temp_offset(temp) < 128);
+        EMIT_MOV64_OFF8_REG(REG_FRAME, get_register(rhs), get_temp_offset(temp));
+        debug("%s spilled to memory from register %d", rhs->id, rhs->reg);
+
+        if (!bite_compile(mem, lhs))
+        {
+            return false;
+        }
+
+        EMIT_ADD64_REG_OFF8(get_register(lhs), REG_FRAME, get_temp_offset(temp));
+        bite->reg = lhs->reg;
+    }
+
+    return true;
+}
+
+bool bite_compile(uint8_t** mem, Bite* bite)
+{
+    switch (bite->op)
+    {
+    case OP_CONSTANT:
+        return bite_compile_constant(mem, bite);
+
+    case OP_PARAMETER:
+        return bite_compile_argument(mem, bite);
+
+    case OP_ADD:
+        return bite_compile_add(mem, bite);
+
+    case OP_SUB:
+    case OP_LESS:
+    case OP_EQ:
+    case OP_NEG:
+    case OP_PTR:
+    case OP_IF:
+    case OP_RECURSE:
+    case OP_CALL:
+    case OP_BRANCH:
+    case OP_LIST:
+    default:
+        break;
+    }
+
+    return false;
+}
+
 Bite* fold_constants(Bite* bite);
 
 Bite* compile_time_add(Bite* arg1, Bite* arg2)
@@ -1238,49 +1497,10 @@ const char* reg_name(int reg)
     return buffer;
 }
 
-void analyze_liveness(Bite* bite, Bite** live_ones)
+typedef void (*RecurseBiteFunc)(Bite*, int);
+
+void recurse_bites(Bite* bite, RecurseBiteFunc func, int depth)
 {
-    Bite* variables[1024];
-    Bite** ptr = variables;
-    memset(variables, 0, sizeof(variables));
-
-    // Copy to outgoing
-    for (Bite** b = live_ones; *b; b++)
-    {
-        if (*b != bite)
-        {
-            *ptr++ = *b;
-        }
-    }
-
-    if (bite->op != OP_CONSTANT && bite->op != OP_PARAMETER)
-    {
-        add_temp(bite);
-    }
-
-    print_bite_norecurse(bite);
-
-    printf(" | { ");
-    for (Bite** b = live_ones; *b; b++)
-    {
-        printf("%s%s ", (*b)->id, (*b == bite ? "+" : ""));
-    }
-    printf(" -> ");
-
-    for (Bite** b = variables; *b; b++)
-    {
-        printf("%s ", (*b)->id);
-    }
-
-    printf("} ");
-
-    for (Bite** b = temporaries; *b; b++)
-    {
-        printf("%s = %s ", reg_name((*b)->reg), (*b)->id);
-    }
-
-    printf("\n");
-
     switch (bite->op)
     {
     case OP_CONSTANT:
@@ -1291,49 +1511,116 @@ void analyze_liveness(Bite* bite, Bite** live_ones)
     case OP_SUB:
     case OP_LESS:
     case OP_EQ:
-        *ptr++ = bite->arg1;
-        analyze_liveness(bite->arg1, variables);
-        remove_temp(bite->arg1);
-
-        *ptr++ = bite->arg2;
-        analyze_liveness(bite->arg2, variables);
-        remove_temp(bite->arg2);
+        recurse_bites(bite->arg1, func, depth + 1);
+        recurse_bites(bite->arg2, func, depth + 1);
         break;
 
     case OP_NEG:
     case OP_PTR:
-        *ptr++ = bite->arg1;
-        analyze_liveness(bite->arg1, variables);
-        remove_temp(bite->arg1);
+        recurse_bites(bite->arg1, func, depth + 1);
         break;
 
     case OP_IF:
-        *ptr = bite->arg1;
-        analyze_liveness(bite->arg1, variables);
-        remove_temp(bite->arg1);
-
-        *ptr = bite->arg2->arg1;
-        analyze_liveness(bite->arg2->arg1, variables);
-        remove_temp(bite->arg2->arg1);
-
-        *ptr = bite->arg2->arg2;
-        analyze_liveness(bite->arg2->arg2, variables);
-        remove_temp(bite->arg2->arg2);
-
-        assert(bite->arg2->op == OP_BRANCH);
+        recurse_bites(bite->arg1, func, depth + 1);
+        recurse_bites(bite->arg2->arg1, func, depth + 1);
+        recurse_bites(bite->arg2->arg2, func, depth + 1);
         break;
 
     case OP_RECURSE:
     case OP_CALL:
         for (Bite* b = bite->arg1; b; b = b->arg2)
         {
-            *ptr++ = b->arg1;
-            analyze_liveness(b->arg1, variables);
+            recurse_bites(b->arg1, func, depth + 1);
         }
+        break;
 
-        for (Bite* b = bite->arg1; b; b = b->arg2)
+    case OP_BRANCH:
+    case OP_LIST:
+    default:
+        assert(false);
+    }
+
+    func(bite, depth);
+}
+
+void print_registers(Bite* bite, int depth)
+{
+    printf("|");
+    for (int i = 0; i < depth; i++)
+    {
+        printf("-");
+    }
+    printf("> ");
+
+    print_bite_norecurse(bite);
+    printf(" [%d]", bite->reg_count);
+
+    if (bite->reg != -1)
+    {
+        printf(" %s", reg_name(bite->reg));
+    }
+
+    printf("\n");
+}
+
+void calculate_register_count(Bite* bite, bool left_leaf)
+{
+    switch (bite->op)
+    {
+    case OP_CONSTANT:
+    case OP_PARAMETER:
+        bite->reg_count = left_leaf ? 1 : 0;
+        break;
+
+    case OP_ADD:
+    case OP_SUB:
+    case OP_LESS:
+    case OP_EQ:
+        calculate_register_count(bite->arg1, true);
+        calculate_register_count(bite->arg2, false);
+
+        if (bite->arg1->reg_count == bite->arg2->reg_count)
         {
-            remove_temp(b);
+            bite->reg_count = bite->arg1->reg_count + 1;
+        }
+        else
+        {
+            bite->reg_count = MAX(bite->arg1->reg_count, bite->arg2->reg_count);
+        }
+        break;
+
+    case OP_NEG:
+    case OP_PTR:
+        calculate_register_count(bite->arg1, true);
+        bite->reg_count = bite->arg1->reg_count;
+        break;
+
+    case OP_IF:
+        calculate_register_count(bite->arg1, false);
+        calculate_register_count(bite->arg2->arg1, false);
+        calculate_register_count(bite->arg2->arg2, false);
+        break;
+
+    case OP_RECURSE:
+    case OP_CALL:
+        {
+            int reg_count = -1;
+
+            for (Bite* b = bite->arg1; b; b = b->arg2)
+            {
+                calculate_register_count(b->arg1, false);
+
+                if (reg_count == -1)
+                {
+                    reg_count = b->reg_count;
+                }
+                else if (b->reg_count > reg_count)
+                {
+                    reg_count = b->reg_count;
+                }
+            }
+
+            bite->reg_count = MAX(0, reg_count);
         }
         break;
 
@@ -1365,15 +1652,59 @@ bool generate_bytecode(uint8_t** mem, Object* /*scope*/, Object* /*name*/, Objec
         print_bitecode(res);
     }
 
-    debug("ANALYZE LIVENESS START");
-    memset(temporaries, 0, sizeof(temporaries));
-    add_temp(res);
-    Bite* live_ones[2] = {res, NULL};
-    analyze_liveness(res, live_ones);
-    remove_temp(res);
-    debug("ANALYZE LIVENESS END");
+    calculate_register_count(res, false);
 
-    bool ok = compile_expr(mem, self, params, body);
+    RegList regs;
+    for (int i = 0; i < 4; i++)
+    {
+        regs.reg[i] = i;
+    }
+
+    regs.size = TEMP_REGISTERS;
+    reglist = &regs;
+
+    if (debug_on())
+    {
+        debug("After counting registers");
+        recurse_bites(res, print_registers, 0);
+    }
+
+    bool ok;
+    uint8_t* orig_mem = *mem;
+
+    size_t stack_space = 0;
+
+    if (res->reg_count > TEMP_REGISTERS)
+    {
+        stack_space = OBJ_SIZE * (res->reg_count - TEMP_REGISTERS);
+    }
+
+    if (stack_space > 0)
+    {
+        RESERVE_STACK(stack_space);
+    }
+
+    ok = bite_compile(mem, res);
+
+    assert(!ok || res->reg == 0);
+
+    if (stack_space > 0)
+    {
+        FREE_STACK(stack_space);
+    }
+
+    if (!ok)
+    {
+        debug("Bite compilation FAILED!");
+        *mem = orig_mem;
+        ok = compile_expr(mem, self, params, body);
+    }
+    else if (debug_on())
+    {
+        debug("Bite compilation successful!");
+        recurse_bites(res, print_registers, 0);
+    }
+
     EMIT_RET();
     return ok;
 }

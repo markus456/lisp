@@ -6,22 +6,22 @@
 //
 
 // Registers (assuming System V call convention)
-#define REG_RAX 0 // RAX: return value
-#define REG_RCX 1 // RCX: 4th argument
-#define REG_RDX 2 // RDX: 3rd argument
-#define REG_RBX 3 // RBX: callee saved (don't use)
-#define REG_RSP 4 // RSP: stack pointer (don't use)
-#define REG_RBP 5 // RBP: frame pointer (don't use)
-#define REG_RSI 6 // RSI: 2nd argument
-#define REG_RDI 7 // RDI: 1st argument
-#define REG_R8    // R8:  5th argument
-#define REG_R9    // R9:  6th argument
-#define REG_R10   // R10: temporary register
-#define REG_R11   // R11: temporary register
-#define REG_R12   // R12: callee saved (don't use)
-#define REG_R13   // R13: callee saved (don't use)
-#define REG_R14   // R14: callee saved (don't use)
-#define REG_R15   // R15: callee saved (don't use)
+#define REG_RAX 0  // RAX: return value
+#define REG_RCX 1  // RCX: 4th argument
+#define REG_RDX 2  // RDX: 3rd argument
+#define REG_RBX 3  // RBX: callee saved (don't use)
+#define REG_RSP 4  // RSP: stack pointer (don't use)
+#define REG_RBP 5  // RBP: frame pointer (don't use)
+#define REG_RSI 6  // RSI: 2nd argument
+#define REG_RDI 7  // RDI: 1st argument
+#define REG_R8  8  // R8:  5th argument
+#define REG_R9  9  // R9:  6th argument
+#define REG_R10 10 // R10: temporary register
+#define REG_R11 11 // R11: temporary register
+#define REG_R12 12 // R12: callee saved (don't use)
+#define REG_R13 13 // R13: callee saved (don't use)
+#define REG_R14 14 // R14: callee saved (don't use)
+#define REG_R15 15 // R15: callee saved (don't use)
 
 // Constants used in the code, makes it easier to remember what each register is used for
 
@@ -80,11 +80,17 @@
 // MOV: *a = imm32 (sign-extended to imm64)
 #define EMIT_MOV64_PTR_IMM32(a, imm) EMIT(REX_W); EMIT(0xc7); EMIT(OP_RM(a)); EMIT_IMM32(imm);
 
+// ADD: a += b
+#define EMIT_ADD64_REG_REG(a, b) EMIT(REX_W); EMIT(0x01); EMIT(0xc0 | OP_REG(b) | OP_RM(a));
+
 // ADD: *a += b
 #define EMIT_ADD64_PTR_REG(a, b) EMIT(REX_W); EMIT(0x01); EMIT(OP_REG(b) | OP_RM(a));
 
 // ADD: a[off] += b
 #define EMIT_ADD64_OFF8_REG(a, b, off) EMIT(REX_W); EMIT(0x01); EMIT(0x40 |  OP_REG(b) | OP_RM(a)); EMIT(off);
+
+// ADD: a += b[off]
+#define EMIT_ADD64_REG_OFF8(a, b, off) EMIT(REX_W); EMIT(0x03); EMIT(0x40 |  OP_REG(a) | OP_RM(b)); EMIT(off);
 
 // ADD: a += imm8
 #define EMIT_ADD64_IMM8(a, i) EMIT(REX_W); EMIT(0x83); EMIT(0xc0 | OP_RM(a)); EMIT_IMM8(i);
@@ -94,6 +100,9 @@
 
 // SUB: a -= imm8
 #define EMIT_SUB64_IMM8(a, i) EMIT(REX_W); EMIT(0x83); EMIT(0xc0 | OP_REG(0x5) | OP_RM(a)); EMIT_IMM8(i);
+
+// SUB: a -= imm32
+#define EMIT_SUB64_IMM32(a, i) EMIT(REX_W); EMIT(0x81); EMIT(0xc0 | OP_REG(0x5) | OP_RM(a)); EMIT_IMM32(i);
 
 // SUB: *a += b
 #define EMIT_SUB64_PTR_REG(a, b) EMIT(REX_W); EMIT(0x29); EMIT(OP_REG(b) | OP_RM(a));
@@ -153,5 +162,5 @@ void PATCH_JMP32(uint8_t* ptr, uint32_t off);
 
 #define EMIT_EPILOGUE() EMIT_POP(REG_RBP)
 
-#define RESERVE_STACK(size) EMIT_PROLOGUE(); EMIT_SUB64_IMM8(REG_STACK, size);
-#define FREE_STACK(size) EMIT_ADD64_IMM8(REG_STACK, size); EMIT_EPILOGUE();
+#define RESERVE_STACK(size) EMIT_PROLOGUE(); if (size < 128) {EMIT_SUB64_IMM8(REG_STACK, size);} else {EMIT_SUB64_IMM32(REG_STACK, size);}
+#define FREE_STACK(size) if (size < 128) {EMIT_ADD64_IMM8(REG_STACK, size);} else {EMIT_ADD64_IMM32(REG_STACK, size);} EMIT_EPILOGUE();
