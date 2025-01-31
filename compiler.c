@@ -1276,7 +1276,6 @@ bool bite_compile_binary_op(uint8_t** mem, Bite* bite, int op)
             return false;
         }
 
-
         RegList r;
         RegList* prev = reglist_push(&r, lhs->reg);
 
@@ -1578,57 +1577,6 @@ Bite* fold_constants(Bite* bite)
     }
 
     return bite;
-}
-
-
-Bite* temporaries[128];
-
-void add_temp(Bite* bite)
-{
-    ptrdiff_t num = 0;
-    Bite** b = temporaries;
-
-    while (b[num])
-    {
-        if (b[num] == bite)
-        {
-            debug("Already in use: %s", bite->id);
-            return;
-        }
-
-        num++;
-    }
-
-    bite->reg = num;
-
-    debug("Allocated: %s to slot %d", bite->id, bite->reg);
-
-    b[num] = bite;
-}
-
-void remove_temp(Bite* bite)
-{
-    Bite** b = temporaries;
-
-    while (*b)
-    {
-        if (*b == bite)
-        {
-            debug("Free: %s from slot %d", bite->id, bite->reg);
-
-            Bite** out = b++;
-
-            while (*b)
-            {
-                *out++ = *b++;
-            }
-
-            *out = NULL;
-            return;
-        }
-
-        b++;
-    }
 }
 
 const char* reg_name(int reg)
