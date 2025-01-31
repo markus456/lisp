@@ -125,7 +125,8 @@ bool resolve_symbols(Object* scope, Object* name, Object* self, Object* params, 
 bool valid_for_compile(Object* self, Object* params, Object* body)
 {
     int type = get_type(body);
-    if (type == TYPE_NUMBER || type == TYPE_CONST)
+    if (type == TYPE_NUMBER || type == TYPE_CONST
+        || (type == TYPE_SYMBOL && (body == symbol("nil") || body == symbol("t"))))
     {
         debug("Constant expression, trivial to implement");
         debug_print(body);
@@ -510,6 +511,15 @@ Bite* bite_expr(Bite** bites, Object* self, Object* params, Object* obj)
             break;
         }
     case TYPE_SYMBOL:
+        if (obj == symbol("nil"))
+        {
+            return bite_immediate(bites, Nil);
+        }
+        else if (obj == symbol("t"))
+        {
+            return bite_immediate(bites, True);
+        }
+
         return bite_argument(bites, params, obj);
 
     case TYPE_CONST:
