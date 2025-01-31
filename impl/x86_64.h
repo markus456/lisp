@@ -125,6 +125,9 @@
 // SAL: a <<= imm8
 #define EMIT_SAL64_IMM8(a, i) EMIT(REX_W); EMIT(0xc1); EMIT(0xc0 | OP_REG(0x4) | OP_RM(a)); EMIT_IMM8(i);
 
+// CMP: a == b
+#define EMIT_CMP64_REG_REG(a, b) EMIT(REX_W); EMIT(0x39); EMIT(0xc0 | OP_REG(a) | OP_RM(b));
+
 // CMP: a == *b
 #define EMIT_CMP64_REG_PTR(a, b) EMIT(REX_W); EMIT(0x39); EMIT(OP_REG(a) | OP_RM(b));
 
@@ -133,6 +136,9 @@
 
 // CMP: a == imm8
 #define EMIT_CMP64_REG_IMM8(a, i) EMIT(REX_W); EMIT(0x83); EMIT(0xc0 | OP_REG(0x7) | OP_RM(a)); EMIT_IMM8(i);
+
+// CMP: a == imm32
+#define EMIT_CMP64_IMM32(a, i) EMIT(REX_W); EMIT(0x81); EMIT(0xc0 | OP_REG(0x7) | OP_RM(a)); EMIT_IMM32(i);
 
 // JMP: unconditional jump, imm8 offset (Stores a placeholder that's filled in later)
 #define EMIT_JMP_OFF8() EMIT(0xeb); EMIT_IMM8(0x0);

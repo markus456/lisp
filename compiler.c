@@ -1203,7 +1203,7 @@ bool bite_compile_argument(uint8_t** mem, Bite* bite)
     return true;
 }
 
-bool bite_compile_add_sub(uint8_t** mem, Bite* bite, int op)
+bool bite_compile_binary_op(uint8_t** mem, Bite* bite, int op)
 {
     Bite* lhs = bite->arg1;
     Bite* rhs = bite->arg2;
@@ -1230,6 +1230,11 @@ bool bite_compile_add_sub(uint8_t** mem, Bite* bite, int op)
                 EMIT_SUB64_REG_OFF8(get_register(lhs), REG_ARGS, get_constant(rhs));
                 break;
 
+            case OP_LESS:
+            case OP_EQ:
+                EMIT_CMP64_REG_OFF8(get_register(lhs), REG_ARGS, get_constant(rhs));
+                break;
+
             default:
                 assert(false);
                 break;
@@ -1248,6 +1253,11 @@ bool bite_compile_add_sub(uint8_t** mem, Bite* bite, int op)
 
             case OP_SUB:
                 EMIT_SUB64_IMM32(get_register(lhs), get_constant(rhs));
+                break;
+
+            case OP_LESS:
+            case OP_EQ:
+                EMIT_CMP64_IMM32(get_register(lhs), get_constant(rhs));
                 break;
 
             default:
@@ -1289,6 +1299,11 @@ bool bite_compile_add_sub(uint8_t** mem, Bite* bite, int op)
             EMIT_SUB64_REG_REG(get_register(lhs), get_register(rhs));
             break;
 
+        case OP_LESS:
+        case OP_EQ:
+            EMIT_CMP64_REG_REG(get_register(lhs), get_register(rhs));
+            break;
+
         default:
             assert(false);
             break;
@@ -1324,6 +1339,11 @@ bool bite_compile_add_sub(uint8_t** mem, Bite* bite, int op)
 
         case OP_SUB:
             EMIT_SUB64_REG_REG(get_register(lhs), get_register(rhs));
+            break;
+
+        case OP_LESS:
+        case OP_EQ:
+            EMIT_CMP64_REG_REG(get_register(lhs), get_register(rhs));
             break;
 
         default:
@@ -1364,12 +1384,36 @@ bool bite_compile_add_sub(uint8_t** mem, Bite* bite, int op)
             EMIT_SUB64_REG_OFF8(get_register(lhs), REG_FRAME, get_temp_offset(temp));
             break;
 
+        case OP_LESS:
+        case OP_EQ:
+            EMIT_CMP64_REG_OFF8(get_register(lhs), REG_FRAME, get_temp_offset(temp));
+            break;
+
         default:
             assert(false);
             break;
         }
 
         bite->reg = lhs->reg;
+    }
+
+    if (bite->op == OP_EQ || bite->op == OP_LESS)
+    {
+        EMIT_MOV64_REG_IMM64(get_register(bite), (intptr_t)True);
+
+        if (bite->op == OP_EQ)
+        {
+            EMIT_JE_OFF8();
+        }
+        else
+        {
+            EMIT_JL_OFF8();
+        }
+        uint8_t* jump_start = *mem;
+
+        EMIT_MOV64_REG_IMM64(get_register(bite), (intptr_t)Nil);
+        uint8_t* jump_end = *mem;
+        PATCH_JMP8(jump_start, jump_end - jump_start);
     }
 
     return true;
@@ -1387,10 +1431,10 @@ bool bite_compile(uint8_t** mem, Bite* bite)
 
     case OP_ADD:
     case OP_SUB:
-        return bite_compile_add_sub(mem, bite, bite->op);
-
-    case OP_LESS:
     case OP_EQ:
+    case OP_LESS:
+        return bite_compile_binary_op(mem, bite, bite->op);
+
     case OP_NEG:
     case OP_PTR:
     case OP_IF:
