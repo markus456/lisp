@@ -1119,6 +1119,12 @@ intptr_t get_constant(Bite* bite)
     return (intptr_t)bite->arg1;
 }
 
+intptr_t get_ptr_offset(Bite* bite)
+{
+    assert(bite->op == OP_PTR);
+    return (intptr_t)bite->arg2;
+}
+
 int get_temp_offset(int tmp)
 {
     return (tmp + 1) * -8;
@@ -1418,6 +1424,34 @@ bool bite_compile_binary_op(uint8_t** mem, Bite* bite, int op)
     return true;
 }
 
+bool bite_compile_unary_op(uint8_t** mem, Bite* bite, int op)
+{
+    Bite* val = bite->arg1;
+
+    if (!bite_compile(mem, val))
+    {
+        return false;
+    }
+
+    int reg = get_register(val);
+
+    switch (op)
+    {
+    case OP_NEG:
+        EMIT_NEG64(reg);
+        break;
+
+    case OP_PTR:
+        assert(get_ptr_offset(bite) < 128);
+        EMIT_MOV64_REG_OFF8(reg, reg, get_ptr_offset(bite));
+        break;
+    }
+
+    bite->reg = reg;
+    debug("%s uses register %d from %s", bite->id, bite->reg, val->id);
+    return true;
+}
+
 bool bite_compile(uint8_t** mem, Bite* bite)
 {
     switch (bite->op)
@@ -1436,6 +1470,8 @@ bool bite_compile(uint8_t** mem, Bite* bite)
 
     case OP_NEG:
     case OP_PTR:
+        return bite_compile_unary_op(mem, bite, bite->op);
+
     case OP_IF:
     case OP_RECURSE:
     case OP_CALL:
