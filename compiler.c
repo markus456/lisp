@@ -1193,7 +1193,7 @@ bool bite_compile_argument(uint8_t** mem, Bite* bite)
     return true;
 }
 
-bool bite_compile_add(uint8_t** mem, Bite* bite)
+bool bite_compile_add_sub(uint8_t** mem, Bite* bite, int op)
 {
     Bite* lhs = bite->arg1;
     Bite* rhs = bite->arg2;
@@ -1210,13 +1210,40 @@ bool bite_compile_add(uint8_t** mem, Bite* bite)
 
         if (is_argument(rhs))
         {
-            EMIT_ADD64_REG_OFF8(get_register(lhs), REG_ARGS, get_constant(rhs));
+            switch (op)
+            {
+            case OP_ADD:
+                EMIT_ADD64_REG_OFF8(get_register(lhs), REG_ARGS, get_constant(rhs));
+                break;
+
+            case OP_SUB:
+                EMIT_SUB64_REG_OFF8(get_register(lhs), REG_ARGS, get_constant(rhs));
+                break;
+
+            default:
+                assert(false);
+                break;
+            }
         }
         else
         {
             // TODO: deal with larger than 32-bit constants
             assert(get_constant(rhs) < 0xffffffff);
-            EMIT_ADD64_IMM32(get_register(lhs), get_constant(rhs));
+
+            switch (op)
+            {
+            case OP_ADD:
+                EMIT_ADD64_IMM32(get_register(lhs), get_constant(rhs));
+                break;
+
+            case OP_SUB:
+                EMIT_SUB64_IMM32(get_register(lhs), get_constant(rhs));
+                break;
+
+            default:
+                assert(false);
+                break;
+            }
         }
 
         bite->reg = lhs->reg;
@@ -1241,7 +1268,22 @@ bool bite_compile_add(uint8_t** mem, Bite* bite)
         reglist_pop(prev);
 
         assert(rhs->reg != lhs->reg);
-        EMIT_ADD64_REG_REG(get_register(lhs), get_register(rhs));
+
+        switch (op)
+        {
+        case OP_ADD:
+            EMIT_ADD64_REG_REG(get_register(lhs), get_register(rhs));
+            break;
+
+        case OP_SUB:
+            EMIT_SUB64_REG_REG(get_register(lhs), get_register(rhs));
+            break;
+
+        default:
+            assert(false);
+            break;
+        }
+
         bite->reg = lhs->reg;
         debug("%s uses register %d from %s", bite->id, bite->reg, lhs->id);
     }
@@ -1263,9 +1305,24 @@ bool bite_compile_add(uint8_t** mem, Bite* bite)
         reglist_pop(prev);
 
         assert(rhs->reg != lhs->reg);
-        EMIT_ADD64_REG_REG(get_register(rhs), get_register(lhs));
-        bite->reg = rhs->reg;
-        debug("%s uses register %d from %s", bite->id, bite->reg, rhs->id);
+
+        switch (op)
+        {
+        case OP_ADD:
+            EMIT_ADD64_REG_REG(get_register(lhs), get_register(rhs));
+            break;
+
+        case OP_SUB:
+            EMIT_SUB64_REG_REG(get_register(lhs), get_register(rhs));
+            break;
+
+        default:
+            assert(false);
+            break;
+        }
+
+        bite->reg = lhs->reg;
+        debug("%s uses register %d from %s", bite->id, bite->reg, lhs->id);
     }
     else
     {
@@ -1287,7 +1344,21 @@ bool bite_compile_add(uint8_t** mem, Bite* bite)
             return false;
         }
 
-        EMIT_ADD64_REG_OFF8(get_register(lhs), REG_FRAME, get_temp_offset(temp));
+        switch (op)
+        {
+        case OP_ADD:
+            EMIT_ADD64_REG_OFF8(get_register(lhs), REG_FRAME, get_temp_offset(temp));
+            break;
+
+        case OP_SUB:
+            EMIT_SUB64_REG_OFF8(get_register(lhs), REG_FRAME, get_temp_offset(temp));
+            break;
+
+        default:
+            assert(false);
+            break;
+        }
+
         bite->reg = lhs->reg;
     }
 
@@ -1305,9 +1376,9 @@ bool bite_compile(uint8_t** mem, Bite* bite)
         return bite_compile_argument(mem, bite);
 
     case OP_ADD:
-        return bite_compile_add(mem, bite);
-
     case OP_SUB:
+        return bite_compile_add_sub(mem, bite, bite->op);
+
     case OP_LESS:
     case OP_EQ:
     case OP_NEG:
@@ -1332,44 +1403,72 @@ Bite* compile_time_add(Bite* arg1, Bite* arg2)
     Object* rhs = (Object*)arg2->arg1;
     Object* result = make_number(get_number(lhs) + get_number(rhs));
 
-    debug("Compile time add: %s + %s => %p + %p = %p",
-          arg1->id, arg2->id, lhs, rhs, result);
+    debug("Compile time add: %s + %s => %ld + %ld = %ld => %p + %p = %p",
+          arg1->id, arg2->id,
+          get_number(lhs), get_number(rhs), get_number(lhs) + get_number(rhs),
+          lhs, rhs, result);
 
     arg1->arg1 = (Bite*)result;
     return arg1;
 }
 
-Bite* optimize_add(Bite* add, bool* optimized)
+Bite* compile_time_sub(Bite* arg1, Bite* arg2)
 {
-    debug("ADD: %s", add->id);
+    Object* lhs = (Object*)arg1->arg1;
+    Object* rhs = (Object*)arg2->arg1;
+    Object* result = make_number(get_number(lhs) - get_number(rhs));
 
-    if (add->arg1->op == OP_CONSTANT && add->arg2->op == OP_CONSTANT)
+    debug("Compile time sub: %s - %s => %ld - %ld = %ld => %p - %p = %p",
+          arg1->id, arg2->id,
+          get_number(lhs), get_number(rhs), get_number(lhs) - get_number(rhs),
+          lhs, rhs, result);
+
+    arg1->arg1 = (Bite*)result;
+    return arg1;
+}
+
+Bite* optimize_add_sub(Bite* arith, bool* optimized)
+{
+    debug("%s: %s", arith->op == OP_ADD ? "ADD" : "SUB", arith->id);
+
+    if (arith->arg1->op == OP_CONSTANT && arith->arg2->op == OP_CONSTANT)
     {
-        add = compile_time_add(add->arg1, add->arg2);
+        if (arith->op == OP_ADD)
+        {
+            arith = compile_time_add(arith->arg1, arith->arg2);
+        }
+        else
+        {
+            arith = compile_time_sub(arith->arg1, arith->arg2);
+        }
+
         *optimized = true;
     }
-    else if (add->arg1->op == OP_ADD && add->arg2->op == OP_CONSTANT)
+    else if (arith->arg1->op == arith->op && arith->arg2->op == OP_CONSTANT)
     {
+        // For both addition and subtraction, we can add up the constants together.
         bool found = false;
 
-        for (Bite* b = add->arg1; !found && b->op == OP_ADD; b = b->arg1)
+        for (Bite* b = arith->arg1; !found && b->op == arith->op; b = b->arg1)
         {
             if (b->arg2->op == OP_CONSTANT)
             {
-                add = compile_time_add(add->arg2, b->arg2);
+                b->arg2 = compile_time_add(arith->arg2, b->arg2);
+                arith = arith->arg1;
                 *optimized = true;
                 break;
             }
             else if (b->arg1->op == OP_CONSTANT)
             {
-                add = compile_time_add(add->arg1, b->arg2);
+                b->arg1 = compile_time_add(arith->arg1, b->arg1);
+                arith = arith->arg2;
                 *optimized = true;
                 break;
             }
         }
     }
 
-    return add;
+    return arith;
 }
 
 Bite* fold_constants(Bite* bite)
@@ -1381,18 +1480,18 @@ Bite* fold_constants(Bite* bite)
     case OP_PARAMETER:
         break;
 
+    case OP_SUB:
     case OP_ADD:
         do
         {
             optimized = false;
             bite->arg1 = fold_constants(bite->arg1);
             bite->arg2 = fold_constants(bite->arg2);
-            bite = optimize_add(bite, &optimized);
+            bite = optimize_add_sub(bite, &optimized);
         }
-        while (optimized && bite->op == OP_ADD);
+        while (optimized && (bite->op == OP_ADD || bite->op == OP_SUB));
         break;
 
-    case OP_SUB:
     case OP_LESS:
     case OP_EQ:
         bite->arg1 = fold_constants(bite->arg1);
@@ -1686,7 +1785,12 @@ bool generate_bytecode(uint8_t** mem, Object* /*scope*/, Object* /*name*/, Objec
 
     ok = bite_compile(mem, res);
 
-    assert(!ok || res->reg == 0);
+    if (ok && res->reg > 0)
+    {
+        // If the return value didn't end up being in RAX, move it there.
+        // This probably could be solved somehow but this'll do for now.
+        EMIT_MOV64_REG_REG(REG_RET, get_register(res));
+    }
 
     if (stack_space > 0)
     {
