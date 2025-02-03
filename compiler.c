@@ -6,6 +6,12 @@
 
 #define COMPILE_MEM_SIZE 4096
 
+// A lot of instructions only allow 32-bit immediate values. Values larger than
+// that must be first stored into a register. For the register allocation
+// scheme, only 32-bit constants and memory locations (i.e. function arguments)
+// are treated as ones that do not require a register to process.
+#define MAX_IMMEDIATE_CONSTANT_SIZE 0xFFFFFFFCL
+
 #define MAX(a, b) (a > b ? a : b)
 
 struct CompiledFunction
@@ -879,10 +885,10 @@ bool compile_less(uint8_t** mem, Object* self, Object* params, Object* args)
 {
     RESERVE_STACK(OBJ_SIZE);
 
-    compile_expr(mem, self, params, car(args));
+    compile_expr(mem, self, params, car(cdr(args)));
     EMIT_SAR64_IMM8(REG_RET, 2);
     EMIT_MOV64_OFF8_REG(REG_FRAME, REG_RET, -OBJ_SIZE);
-    compile_expr(mem, self, params, car(cdr(args)));
+    compile_expr(mem, self, params, car(args));
     EMIT_SAR64_IMM8(REG_RET, 2);
 
     EMIT_CMP64_REG_OFF8(REG_RET, REG_FRAME, -OBJ_SIZE);
@@ -1248,8 +1254,8 @@ bool bite_compile_binary_op(uint8_t** mem, Bite* bite, int op)
         }
         else
         {
-            // TODO: deal with larger than 32-bit constants
-            assert(get_constant(rhs) < 0xffffffff);
+            assert(get_constant(rhs) < MAX_IMMEDIATE_CONSTANT_SIZE &&
+                   get_constant(rhs) > -MAX_IMMEDIATE_CONSTANT_SIZE);
 
             switch (op)
             {
@@ -1402,24 +1408,28 @@ bool bite_compile_binary_op(uint8_t** mem, Bite* bite, int op)
         bite->reg = lhs->reg;
     }
 
-    if (bite->op == OP_EQ || bite->op == OP_LESS)
+    return true;
+}
+
+bool bite_compile_cmp_tail(uint8_t** mem, Bite* bite, int op)
+{
+    assert(op == OP_EQ || op == OP_LESS);
+
+    EMIT_MOV64_REG_IMM64(get_register(bite), (intptr_t)True);
+
+    if (op == OP_EQ)
     {
-        EMIT_MOV64_REG_IMM64(get_register(bite), (intptr_t)True);
-
-        if (bite->op == OP_EQ)
-        {
-            EMIT_JE_OFF8();
-        }
-        else
-        {
-            EMIT_JL_OFF8();
-        }
-        uint8_t* jump_start = *mem;
-
-        EMIT_MOV64_REG_IMM64(get_register(bite), (intptr_t)Nil);
-        uint8_t* jump_end = *mem;
-        PATCH_JMP8(jump_start, jump_end - jump_start);
+        EMIT_JE_OFF8();
     }
+    else
+    {
+        EMIT_JL_OFF8();
+    }
+    uint8_t* jump_start = *mem;
+
+    EMIT_MOV64_REG_IMM64(get_register(bite), (intptr_t)Nil);
+    uint8_t* jump_end = *mem;
+    PATCH_JMP8(jump_start, jump_end - jump_start);
 
     return true;
 }
@@ -1452,6 +1462,88 @@ bool bite_compile_unary_op(uint8_t** mem, Bite* bite, int op)
     return true;
 }
 
+bool bite_compile_if(uint8_t** mem, Bite* bite)
+{
+    Bite* cond = bite->arg1;
+    Bite* true_branch = bite->arg2->arg1;
+    Bite* false_branch = bite->arg2->arg2;
+    int op = cond->op;
+
+    // If the condition is an equality comparison, we can skip the nil and true
+    // constants and use the comparisons directly.
+    if (op == OP_EQ || op == OP_LESS)
+    {
+        if (!bite_compile_binary_op(mem, cond, op))
+        {
+            return false;
+        }
+
+        // For operations other than OP_EQ and OP_LESS, the result is compared
+        // against Nil any any non-Nil value is considered true. As we're using
+        // the result of the comparison directly, the branches must be swapped
+        // as the jump is now done if the comparison is true.
+        Bite* tmp = true_branch;
+        true_branch = false_branch;
+        false_branch = tmp;
+
+        if (op == OP_EQ)
+        {
+            EMIT_JE_OFF32();
+        }
+        else
+        {
+            EMIT_JL_OFF32();
+        }
+    }
+    else
+    {
+        if (!bite_compile(mem, cond))
+        {
+            return false;
+        }
+
+        EMIT_CMP64_REG_IMM8(get_register(cond), (intptr_t)Nil);
+        EMIT_JE_OFF32();
+    }
+
+    uint8_t* jump_to_false = *mem;
+
+    if (!bite_compile(mem, true_branch))
+    {
+        return false;
+    }
+
+    EMIT_JMP_OFF32();
+
+    uint8_t* jump_to_end = *mem;
+
+    if (!bite_compile(mem, false_branch))
+    {
+        return false;
+    }
+
+    // Using either the true branch or the false barnch as the return
+    // register of this bite avoids a move that would otherwise always
+    // be done if the condition's register was used. As registers are
+    // allocated first-come-first-serve, the condition is likely to be
+    // stored in REG_RET which also might avoid a move in some cases.
+    //
+    // TODO: Figure out if there's a way to force the result to always
+    // be stored in REG_RET at the root of the expression tree.
+    if (get_register(true_branch) != get_register(false_branch))
+    {
+        EMIT_MOV64_REG_REG(get_register(true_branch), get_register(false_branch));
+    }
+
+    uint8_t* end = *mem;
+    PATCH_JMP32(jump_to_false, jump_to_end - jump_to_false);
+    PATCH_JMP32(jump_to_end, end - jump_to_end);
+
+    bite->reg = true_branch->reg;
+    debug("%s uses register %d from %s", bite->id, bite->reg, true_branch->id);
+    return true;
+}
+
 bool bite_compile(uint8_t** mem, Bite* bite)
 {
     switch (bite->op)
@@ -1464,15 +1556,21 @@ bool bite_compile(uint8_t** mem, Bite* bite)
 
     case OP_ADD:
     case OP_SUB:
+        return bite_compile_binary_op(mem, bite, bite->op);
+
     case OP_EQ:
     case OP_LESS:
-        return bite_compile_binary_op(mem, bite, bite->op);
+        return bite_compile_binary_op(mem, bite, bite->op) &&
+            bite_compile_cmp_tail(mem, bite, bite->op);
+
 
     case OP_NEG:
     case OP_PTR:
         return bite_compile_unary_op(mem, bite, bite->op);
 
     case OP_IF:
+        return bite_compile_if(mem, bite);
+
     case OP_RECURSE:
     case OP_CALL:
     case OP_BRANCH:
@@ -1705,6 +1803,21 @@ void calculate_register_count(Bite* bite, bool left_leaf)
     switch (bite->op)
     {
     case OP_CONSTANT:
+        {
+            int64_t val = get_constant(bite);
+
+            if (left_leaf || val >= MAX_IMMEDIATE_CONSTANT_SIZE || val <= -MAX_IMMEDIATE_CONSTANT_SIZE)
+            {
+                // Values that cannot be represented as 32-bit values must be stored in a register.
+                bite->reg_count = 1;
+            }
+            else
+            {
+                bite->reg_count = 0;
+            }
+        }
+        break;
+
     case OP_PARAMETER:
         bite->reg_count = left_leaf ? 1 : 0;
         break;
@@ -1733,31 +1846,27 @@ void calculate_register_count(Bite* bite, bool left_leaf)
         break;
 
     case OP_IF:
-        calculate_register_count(bite->arg1, false);
-        calculate_register_count(bite->arg2->arg1, false);
-        calculate_register_count(bite->arg2->arg2, false);
+        calculate_register_count(bite->arg1, true);
+        calculate_register_count(bite->arg2->arg1, true);
+        calculate_register_count(bite->arg2->arg2, true);
         break;
 
     case OP_RECURSE:
     case OP_CALL:
         {
-            int reg_count = -1;
+            int reg_count = 1;
 
             for (Bite* b = bite->arg1; b; b = b->arg2)
             {
                 calculate_register_count(b->arg1, false);
 
-                if (reg_count == -1)
-                {
-                    reg_count = b->reg_count;
-                }
-                else if (b->reg_count > reg_count)
+                if (b->reg_count > reg_count)
                 {
                     reg_count = b->reg_count;
                 }
             }
 
-            bite->reg_count = MAX(0, reg_count);
+            bite->reg_count = reg_count;
         }
         break;
 

@@ -1752,16 +1752,25 @@ int main(int argc, char** argv)
             verbose_gc = true;
             break;
 
-#ifndef NDEBUG
         case 's':
+#ifdef NDEBUG
+            printf("The -s flag is not available in optimized binaries\n");
+            return 1;
+#else
             is_stack_trace = true;
+#endif
             break;
 
         case 'd':
+#ifdef NDEBUG
+            printf("The -d flag is not available in optimized binaries\n");
+            return 1;
+#else
             is_stack_trace = true;
             is_debug = true;
-            break;
 #endif
+            break;
+
         case 'q':
             quiet = true;
             break;
