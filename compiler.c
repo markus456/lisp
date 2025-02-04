@@ -281,6 +281,7 @@ Bite* make_bite(Bite** bites)
 }
 
 Bite* bite_expr(Bite** bites, Object* self, Object* params, Object* obj);
+Bite* bite_expr_recurse(Bite** bites, Object* self, Object* params, Object* obj, bool recurse);
 
 Bite* bite_argument(Bite** bites, Object* params, Object* arg)
 {
@@ -334,6 +335,7 @@ Bite* bite_recursion(Bite** bites, Object* self, Object* params, Object* args)
     Bite* rec = make_bite(bites);
     rec->op = OP_RECURSE;
     rec->arg1 = arglist;
+    rec->arg2 = (Bite*)func_body(self);
     return rec;
 }
 
@@ -461,8 +463,8 @@ Bite* bite_cdr(Bite** bites, Object* self, Object* params, Object* args)
 Bite* bite_if(Bite** bites, Object* self, Object* params, Object* args)
 {
     Bite* cond = bite_expr(bites, self, params, car(args));
-    Bite* if_true = bite_expr(bites, self, params, car(cdr(args)));
-    Bite* if_false = bite_expr(bites, self, params, car(cdr(cdr(args))));
+    Bite* if_true = bite_expr_recurse(bites, self, params, car(cdr(args)), true);
+    Bite* if_false = bite_expr_recurse(bites, self, params, car(cdr(cdr(args))), true);
     Bite* branch = make_bite_impl(bites, "<branch>");
     branch->op = OP_BRANCH;
     branch->arg1 = if_true;
@@ -474,7 +476,7 @@ Bite* bite_if(Bite** bites, Object* self, Object* params, Object* args)
     return if_bite;
 }
 
-Bite* bite_expr(Bite** bites, Object* self, Object* params, Object* obj)
+Bite* bite_expr_recurse(Bite** bites, Object* self, Object* params, Object* obj, bool can_recurse)
 {
     switch (get_type(obj))
     {
@@ -484,7 +486,14 @@ Bite* bite_expr(Bite** bites, Object* self, Object* params, Object* obj)
 
             if (fn == self)
             {
-                return bite_recursion(bites, self, params, cdr(obj));
+                if (can_recurse)
+                {
+                    return bite_recursion(bites, self, params, cdr(obj));
+                }
+                else
+                {
+                    return bite_call(bites, self, params, fn, cdr(obj));
+                }
             }
             else if (get_type(fn) == TYPE_FUNCTION)
             {
@@ -546,6 +555,11 @@ Bite* bite_expr(Bite** bites, Object* self, Object* params, Object* obj)
 
     assert(!true);
     return bite_immediate(bites, Undefined);
+}
+
+Bite* bite_expr(Bite** bites, Object* self, Object* params, Object* obj)
+{
+    return bite_expr_recurse(bites, self, params, obj, false);
 }
 
 void print_fixed(const char* fmt, ...)
@@ -1660,6 +1674,46 @@ bool bite_compile_call(uint8_t** mem, Bite* bite)
     return true;
 }
 
+bool bite_compile_recurse(uint8_t** mem, Bite* bite)
+{
+    int len = 0;
+    int pos = 1;
+
+    for (Bite* b = bite->arg1; b; b = b->arg2)
+    {
+        len++;
+    }
+
+    RESERVE_STACK(OBJ_SIZE * len);
+
+    for (Bite* b = bite->arg1; b; b = b->arg2)
+    {
+        bite_compile(mem, b->arg1);
+        EMIT_MOV64_OFF8_REG(REG_FRAME, get_register(b->arg1), -OBJ_SIZE * pos);
+        pos++;
+    }
+
+    bite->reg = bite->arg1 ? bite->arg1->arg1->reg : reglist->reg[0];
+    debug("%s uses register %d from %s", bite->id, bite->reg,
+          bite->arg1 ? bite->arg1->arg1->id : "free register list");
+
+    for (int i = 0; i < len; i++)
+    {
+        EMIT_MOV64_REG_OFF8(REG_RET, REG_FRAME, -OBJ_SIZE * (i + 1));
+        EMIT_MOV64_OFF8_REG(REG_ARGS, REG_RET, OBJ_SIZE * (len - i - 1));
+    }
+
+    FREE_STACK(OBJ_SIZE * len);
+
+    // Patch the offset right away
+    EMIT_JMP_OFF32_NO_PLACEHOLDER();
+    uint8_t* start = (uint8_t*)bite->arg2;
+    ptrdiff_t backwards = start - *mem - 4; // The extra 4 is for the imm32 that we emit right now
+    EMIT_IMM32(backwards);
+
+    return true;
+}
+
 bool bite_compile(uint8_t** mem, Bite* bite)
 {
     switch (bite->op)
@@ -1691,6 +1745,8 @@ bool bite_compile(uint8_t** mem, Bite* bite)
         return bite_compile_call(mem, bite);
 
     case OP_RECURSE:
+        return bite_compile_recurse(mem, bite);
+
     case OP_BRANCH:
     case OP_LIST:
     default:
@@ -1997,6 +2053,23 @@ void calculate_register_count(Bite* bite, bool left_leaf)
 
 bool generate_bytecode(uint8_t** mem, Object* /*scope*/, Object* /*name*/, Object* self, Object* params, Object* body)
 {
+    uint8_t* orig_mem = *mem;
+
+    // Always emit the instructions for the function prologue and a 32-bit stack size.
+    // These get patched in later as the temporary count is only known after compilation
+    //
+    // TODO: This should really be a separate pass that counts how many
+    // temporaries need to be stored on the stack.
+    EMIT_PROLOGUE();
+    EMIT_SUB64_IMM32(REG_STACK, 0);
+    uint8_t* prologue_end = *mem;
+
+    // The self-recursion needs to jump at the end of the function prologue
+    // instead of at the start, otherwise a new stack frame is created.
+    // This is temporarily set to the prologue end for the compilation and later
+    // it's adjusted back to the start of the function.
+    get_obj(self)->func_body = (Object*) prologue_end;
+
     Bite bitecode[1024];
     Bite* ptr = bitecode;
     bite_ids = 0;
@@ -2033,18 +2106,7 @@ bool generate_bytecode(uint8_t** mem, Object* /*scope*/, Object* /*name*/, Objec
         recurse_bites(res, print_registers, 0);
     }
 
-    bool ok;
-    uint8_t* orig_mem = *mem;
-
-    // Always emit the instructions for the function prologue and a 32-bit stack size.
-    // These get patched in later as the temporary count is only known after compilation
-    //
-    // TODO: This should really be a separate pass that counts how many spills to memory take place
-    EMIT_PROLOGUE();
-    EMIT_SUB64_IMM32(REG_STACK, 0);
-    uint8_t* prologue_end = *mem;
-
-    ok = bite_compile(mem, res);
+    bool ok = bite_compile(mem, res);
 
     if (!ok)
     {
@@ -2086,6 +2148,9 @@ bool generate_bytecode(uint8_t** mem, Object* /*scope*/, Object* /*name*/, Objec
     }
 
     EMIT_RET();
+
+    get_obj(self)->func_body = (Object*) orig_mem;
+
     return ok;
 }
 
