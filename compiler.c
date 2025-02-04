@@ -1,3 +1,6 @@
+#define _GNU_SOURCE
+#include <dlfcn.h>
+
 #include "compiler.h"
 #include "lisp.h"
 
@@ -50,6 +53,23 @@ bool is_supported_builtin(Function fn)
 
 bool compile_expr(uint8_t** mem, Object* self, Object* params, Object* body);
 bool compile_expr_recurse(uint8_t** mem, Object* self, Object* params, Object* obj, bool can_recurse);
+
+const char* symbol_name(void* addr)
+{
+    static char buf[1024];
+    Dl_info info;
+
+    if (dladdr(addr, &info) && info.dli_sname)
+    {
+        sprintf(buf, "%s\n", info.dli_sname);
+    }
+    else
+    {
+        sprintf(buf, "%p\n", addr);
+    }
+
+    return buf;
+}
 
 bool is_parameter(Object* params, Object* value)
 {
@@ -170,7 +190,7 @@ bool valid_for_compile(Object* self, Object* params, Object* body)
     }
     else if (!is_supported_builtin(get_obj(func)->fn))
     {
-        error("Builtin not supported, too complex");
+        error("Builtin not supported, too complex: %s", symbol_name(get_obj(func)->fn));
         print(body);
         return false;
     }
