@@ -202,13 +202,15 @@ void jit_free()
     }
 }
 
+#define BITE_ID_SIZE 10
+
 // A single statement (if, eq, +) turns into bytecode that has multiple
 // parts. Thus, one function is transformed one bite (pun intended) at a time
 // into bytecode that then goes through (eventually) optimization and finally
 // gets transformed into machine code.
 struct Bite
 {
-    char  id[10];
+    char  id[BITE_ID_SIZE];
     int   op;
     bool  printed;
     int   reg;
@@ -238,15 +240,24 @@ enum BiteType {
 
 int bite_ids;
 
-Bite* make_bite(Bite** bites)
+Bite* make_bite_impl(Bite** bites, const char* id)
 {
     Bite* rv = *bites;
     *bites = rv + 1;
 
+    strcpy(rv->id, id);
+    rv->reg = -1;
+    rv->reg_count = 0;
+    rv->printed = false;
+    return rv;
+}
+
+Bite* make_bite(Bite** bites)
+{
     const int radix = ('z' + 1) - 'a';
     int id = bite_ids++;
     bool big = false;
-    char buffer[sizeof(rv->id)];
+    char buffer[BITE_ID_SIZE];
     char* ptr = buffer;
 
     while (id >= radix)
@@ -257,7 +268,8 @@ Bite* make_bite(Bite** bites)
     }
 
     *ptr++ = 'a' + (id % radix) - (big ? 1 : 0);
-    char* output = rv->id;
+    char reversed_buffer[sizeof(buffer)];
+    char* output = reversed_buffer;
 
     while (ptr > buffer)
     {
@@ -265,11 +277,7 @@ Bite* make_bite(Bite** bites)
     }
 
     *output = 0;
-
-    rv->reg = -1;
-    rv->reg_count = 0;
-    rv->printed = false;
-    return rv;
+    return make_bite_impl(bites, reversed_buffer);
 }
 
 Bite* bite_expr(Bite** bites, Object* self, Object* params, Object* obj);
@@ -316,7 +324,7 @@ Bite* bite_recursion(Bite** bites, Object* self, Object* params, Object* args)
 
     for (; args != Nil; args = cdr(args))
     {
-        Bite* list = make_bite(bites);
+        Bite* list = make_bite_impl(bites, "<list>");
         list->op = OP_LIST;
         list->arg1 = bite_expr(bites, self, params, car(args));
         list->arg2 = arglist;
@@ -335,7 +343,7 @@ Bite* bite_call(Bite** bites, Object* self, Object* params, Object* func, Object
 
     for (; args != Nil; args = cdr(args))
     {
-        Bite* list = make_bite(bites);
+        Bite* list = make_bite_impl(bites, "<list>");
         list->op = OP_LIST;
         list->arg1 = bite_expr(bites, self, params, car(args));
         list->arg2 = arglist;
@@ -455,7 +463,7 @@ Bite* bite_if(Bite** bites, Object* self, Object* params, Object* args)
     Bite* cond = bite_expr(bites, self, params, car(args));
     Bite* if_true = bite_expr(bites, self, params, car(cdr(args)));
     Bite* if_false = bite_expr(bites, self, params, car(cdr(cdr(args))));
-    Bite* branch = make_bite(bites);
+    Bite* branch = make_bite_impl(bites, "<branch>");
     branch->op = OP_BRANCH;
     branch->arg1 = if_true;
     branch->arg2 = if_false;
