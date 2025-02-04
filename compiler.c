@@ -1103,9 +1103,9 @@ bool compile_expr(uint8_t** mem, Object* self, Object* params, Object* obj)
 #define TEMP_REGISTERS 4
 #define LAST_TEMP_REGISTER TEMP_REGISTERS - 1
 
-int get_register(Bite* bite)
+int get_x86_64_register(int reg)
 {
-    switch (bite->reg)
+    switch (reg)
     {
     case 0:
         return REG_RET;
@@ -1121,6 +1121,11 @@ int get_register(Bite* bite)
     }
 
     return -1;
+}
+
+int get_register(Bite* bite)
+{
+    return get_x86_64_register(bite->reg);
 }
 
 bool is_argument(Bite* bite)
@@ -1203,6 +1208,19 @@ RegList* reglist_push(RegList* dest, int reg)
 void reglist_pop(RegList* list)
 {
     reglist = list;
+}
+
+bool reglist_in_use(int reg)
+{
+    for (int i = 0; i < reglist->size; i++)
+    {
+        if (reglist->reg[i] == reg)
+        {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 bool bite_compile(uint8_t** mem, Bite* bite);
@@ -1386,7 +1404,7 @@ bool bite_compile_binary_op(uint8_t** mem, Bite* bite, int op)
         int temp = temps++;
         assert(get_temp_offset(temp) < 128);
         EMIT_MOV64_OFF8_REG(REG_FRAME, get_register(rhs), get_temp_offset(temp));
-        debug("%s spilled to memory from register %d", rhs->id, rhs->reg);
+        debug("%s spilled to memory at temp@%d from register %d", rhs->id, temp, rhs->reg);
 
         if (!bite_compile(mem, lhs))
         {
@@ -1552,6 +1570,93 @@ bool bite_compile_if(uint8_t** mem, Bite* bite)
     return true;
 }
 
+bool is_call_argument_register(Bite* bite, int reg)
+{
+    assert(bite->op == OP_CALL);
+
+    for (Bite* b = bite->arg1; b; b = b->arg2)
+    {
+        if (b->arg1->reg == reg)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool bite_compile_call(uint8_t** mem, Bite* bite)
+{
+    int len = 0;
+    int pos = 1;
+
+    for (Bite* b = bite->arg1; b; b = b->arg2)
+    {
+        len++;
+    }
+
+    if (len > 0)
+    {
+        RESERVE_STACK(OBJ_SIZE * len);
+    }
+
+    for (Bite* b = bite->arg1; b; b = b->arg2)
+    {
+        bite_compile(mem, b->arg1);
+        EMIT_MOV64_OFF8_REG(REG_FRAME, get_register(b->arg1), -OBJ_SIZE * pos);
+        pos++;
+    }
+
+    assert(get_x86_64_register(0) == REG_RET);
+    assert(len == 0 || bite->arg1->reg || reglist->size > 0);
+    bite->reg = bite->arg1 ? bite->arg1->arg1->reg : reglist->reg[0];
+
+    for (int r = 0; r < TEMP_REGISTERS; r++)
+    {
+        if (reglist_in_use(r) && !is_call_argument_register(bite, r))
+        {
+            EMIT_PUSH(get_x86_64_register(r));
+        }
+    }
+
+    if (len > 0)
+    {
+        EMIT_PUSH(REG_ARGS);
+        EMIT_MOV64_REG_REG(REG_ARGS, REG_FRAME);
+        EMIT_SUB64_IMM8(REG_ARGS, OBJ_SIZE * len);
+    }
+
+    intptr_t fn = (intptr_t)bite->arg2;
+    EMIT_MOV64_REG_IMM64(REG_RET, fn);
+    EMIT_CALL_REG(REG_RET);
+
+    // Move the result onto the stack
+    if (get_register(bite) != REG_RET)
+    {
+        EMIT_MOV64_REG_REG(get_register(bite), REG_RET);
+    }
+
+    if (len > 0)
+    {
+        EMIT_POP(REG_ARGS);
+    }
+
+    for (int r = TEMP_REGISTERS - 1; r >= 0; r--)
+    {
+        if (reglist_in_use(r) && !is_call_argument_register(bite, r))
+        {
+            EMIT_POP(get_x86_64_register(r));
+        }
+    }
+
+    if (len > 0)
+    {
+        FREE_STACK(OBJ_SIZE * len);
+    }
+
+    return true;
+}
+
 bool bite_compile(uint8_t** mem, Bite* bite)
 {
     switch (bite->op)
@@ -1579,8 +1684,10 @@ bool bite_compile(uint8_t** mem, Bite* bite)
     case OP_IF:
         return bite_compile_if(mem, bite);
 
-    case OP_RECURSE:
     case OP_CALL:
+        return bite_compile_call(mem, bite);
+
+    case OP_RECURSE:
     case OP_BRANCH:
     case OP_LIST:
     default:
@@ -1866,7 +1973,7 @@ void calculate_register_count(Bite* bite, bool left_leaf)
 
             for (Bite* b = bite->arg1; b; b = b->arg2)
             {
-                calculate_register_count(b->arg1, false);
+                calculate_register_count(b->arg1, true);
 
                 if (b->reg_count > reg_count)
                 {
@@ -1926,31 +2033,15 @@ bool generate_bytecode(uint8_t** mem, Object* /*scope*/, Object* /*name*/, Objec
     bool ok;
     uint8_t* orig_mem = *mem;
 
-    size_t stack_space = 0;
-
-    if (res->reg_count > TEMP_REGISTERS)
-    {
-        stack_space = OBJ_SIZE * (res->reg_count - TEMP_REGISTERS);
-    }
-
-    if (stack_space > 0)
-    {
-        RESERVE_STACK(stack_space);
-    }
+    // Always emit the instructions for the function prologue and a 32-bit stack size.
+    // These get patched in later as the temporary count is only known after compilation
+    //
+    // TODO: This should really be a separate pass that counts how many spills to memory take place
+    EMIT_PROLOGUE();
+    EMIT_SUB64_IMM32(REG_STACK, 0);
+    uint8_t* prologue_end = *mem;
 
     ok = bite_compile(mem, res);
-
-    if (ok && res->reg > 0)
-    {
-        // If the return value didn't end up being in RAX, move it there.
-        // This probably could be solved somehow but this'll do for now.
-        EMIT_MOV64_REG_REG(REG_RET, get_register(res));
-    }
-
-    if (stack_space > 0)
-    {
-        FREE_STACK(stack_space);
-    }
 
     if (!ok)
     {
@@ -1958,10 +2049,37 @@ bool generate_bytecode(uint8_t** mem, Object* /*scope*/, Object* /*name*/, Objec
         *mem = orig_mem;
         ok = compile_expr(mem, self, params, body);
     }
-    else if (debug_on())
+    else
     {
-        debug("Bite compilation successful!");
-        recurse_bites(res, print_registers, 0);
+        if (res->reg > 0)
+        {
+            // If the return value didn't end up being in RAX, move it there.
+            // This probably could be solved somehow but this'll do for now.
+            EMIT_MOV64_REG_REG(REG_RET, get_register(res));
+        }
+
+        if (temps > 0)
+        {
+            uint8_t* mem_tmp = *mem;
+            *mem = prologue_end - 4;
+            EMIT_IMM32(temps * OBJ_SIZE);
+            *mem = mem_tmp;
+
+            FREE_STACK(temps * OBJ_SIZE);
+        }
+        else
+        {
+            uint8_t* mem_end = *mem;
+            size_t bytes = mem_end - prologue_end;
+            memmove(orig_mem, prologue_end, bytes);
+            *mem = orig_mem + bytes;
+        }
+
+        if (debug_on())
+        {
+            debug("Bite compilation successful!");
+            recurse_bites(res, print_registers, 0);
+        }
     }
 
     EMIT_RET();
@@ -2112,6 +2230,7 @@ Object* jit_eval(Object* fn, Object* args)
     // to be stored in RDI and a temporary stack pointer to be in RSI.
     for (Object* o = args; o != Nil; o = cdr(o))
     {
+        debug("Arg[%d] = %p", len, cdr(car(o)));
         arg_stack[--len] = cdr(car(o));
     }
 
