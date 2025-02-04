@@ -1432,6 +1432,7 @@ bool bite_compile_binary_op(uint8_t** mem, Bite* bite, int op)
         }
 
         bite->reg = lhs->reg;
+        debug("%s takes register %d from %s", bite->id, bite->reg, lhs->id);
     }
 
     return true;
@@ -1483,7 +1484,7 @@ bool bite_compile_unary_op(uint8_t** mem, Bite* bite, int op)
         break;
     }
 
-    bite->reg = reg;
+    bite->reg = val->reg;
     debug("%s uses register %d from %s", bite->id, bite->reg, val->id);
     return true;
 }
@@ -1610,6 +1611,8 @@ bool bite_compile_call(uint8_t** mem, Bite* bite)
     assert(get_x86_64_register(0) == REG_RET);
     assert(len == 0 || bite->arg1->reg || reglist->size > 0);
     bite->reg = bite->arg1 ? bite->arg1->arg1->reg : reglist->reg[0];
+    debug("%s uses register %d from %s", bite->id, bite->reg,
+          bite->arg1 ? bite->arg1->arg1->id : "free register list");
 
     for (int r = 0; r < TEMP_REGISTERS; r++)
     {
