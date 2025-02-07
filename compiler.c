@@ -1183,6 +1183,17 @@ int get_temp_offset(int tmp)
     return (tmp + 1) * -8;
 }
 
+// These are used to patch the jump point to the start of the function after the
+// function prologue. The way things are now is that the temporary count is only
+// known during compilation so function start offset is deduced later on.
+uint8_t* recursion_markers[1024];
+int recursion_marker_count = 0;
+
+void set_recursion_marker(uint8_t* ptr)
+{
+    recursion_markers[recursion_marker_count++] = ptr;
+}
+
 struct RegList
 {
     int reg[4];
@@ -1725,11 +1736,9 @@ bool bite_compile_recurse(uint8_t** mem, Bite* bite)
 
     FREE_STACK(OBJ_SIZE * len);
 
-    // Patch the offset right away
-    EMIT_JMP_OFF32_NO_PLACEHOLDER();
-    uint8_t* start = (uint8_t*)bite->arg2;
-    ptrdiff_t backwards = start - *mem - 4; // The extra 4 is for the imm32 that we emit right now
-    EMIT_IMM32(backwards);
+    // The offset is patched after compilation is complete
+    EMIT_JMP_OFF32();
+    set_recursion_marker(*mem);
 
     return true;
 }
@@ -2073,6 +2082,8 @@ void calculate_register_count(Bite* bite, bool left_leaf)
 
 bool generate_bytecode(uint8_t** mem, Object* /*scope*/, Object* /*name*/, Object* self, Object* params, Object* body)
 {
+    recursion_marker_count = 0;
+
     uint8_t* orig_mem = *mem;
 
     // Always emit the instructions for the function prologue and a 32-bit stack size.
@@ -2083,12 +2094,6 @@ bool generate_bytecode(uint8_t** mem, Object* /*scope*/, Object* /*name*/, Objec
     EMIT_PROLOGUE();
     EMIT_SUB64_IMM32(REG_STACK, 0);
     uint8_t* prologue_end = *mem;
-
-    // The self-recursion needs to jump at the end of the function prologue
-    // instead of at the start, otherwise a new stack frame is created.
-    // This is temporarily set to the prologue end for the compilation and later
-    // it's adjusted back to the start of the function.
-    get_obj(self)->func_body = (Object*) prologue_end;
 
     Bite bitecode[1024];
     Bite* ptr = bitecode;
@@ -2143,6 +2148,14 @@ bool generate_bytecode(uint8_t** mem, Object* /*scope*/, Object* /*name*/, Objec
             EMIT_MOV64_REG_REG(REG_RET, get_register(res));
         }
 
+        // Patch all the recursion markers to the start of the prologue. If the
+        // prologue is omitted, the jump distance will still be correct.
+        for (int i = 0; i < recursion_marker_count; i++)
+        {
+            uint8_t* ptr = recursion_markers[i];
+            PATCH_JMP32(ptr, prologue_end - ptr);
+        }
+
         if (temps > 0)
         {
             uint8_t* mem_tmp = *mem;
@@ -2168,8 +2181,6 @@ bool generate_bytecode(uint8_t** mem, Object* /*scope*/, Object* /*name*/, Objec
     }
 
     EMIT_RET();
-
-    get_obj(self)->func_body = (Object*) orig_mem;
 
     return ok;
 }
