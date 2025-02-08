@@ -1705,6 +1705,30 @@ bool bite_compile_call(uint8_t** mem, Bite* bite)
     return true;
 }
 
+bool is_redundant_argument_move(Bite* bite, int i)
+{
+    return bite->op == OP_PARAMETER && (intptr_t)bite->arg1 == i * OBJ_SIZE;
+}
+
+int count_redundant_moves(Bite* bite, int len)
+{
+    int redundant_moves = 0;
+    int i = 0;
+
+    for (Bite* b = bite->arg1; b; b = b->arg2)
+    {
+        if (is_redundant_argument_move(b->arg1, len - i - 1))
+        {
+            debug("Redundant move of argument %s at offset %d", b->arg1->id, len - i - 1);
+            ++redundant_moves;
+        }
+
+        i++;
+    }
+
+    return redundant_moves;
+}
+
 bool bite_compile_recurse(uint8_t** mem, Bite* bite)
 {
     int len = 0;
@@ -1715,30 +1739,85 @@ bool bite_compile_recurse(uint8_t** mem, Bite* bite)
         len++;
     }
 
-    RESERVE_STACK(OBJ_SIZE * len);
+    int redundant_moves = count_redundant_moves(bite, len);
+
+    // Whenever recursion is about to happen, there should be no registers in use.
+    assert(reglist->size == TEMP_REGISTERS);
+
+    if (len - redundant_moves > TEMP_REGISTERS)
+    {
+        RESERVE_STACK(OBJ_SIZE * (len - TEMP_REGISTERS));
+    }
+
+    RegList* prev = reglist;
+    RegList regs[4];
+    int n = 0;
+    int i = 0;
 
     for (Bite* b = bite->arg1; b; b = b->arg2)
     {
-        bite_compile(mem, b->arg1);
-        EMIT_MOV64_OFF8_REG(REG_FRAME, get_register(b->arg1), -OBJ_SIZE * pos);
-        pos++;
+        if (!is_redundant_argument_move(b->arg1, len - i - 1))
+        {
+            bite_compile(mem, b->arg1);
+
+            if (bite->reg == -1)
+            {
+                bite->reg = b->arg1->reg;
+                debug("%s uses register %d from %s", bite->id, bite->reg, b->arg1->id);
+            }
+
+            if (reglist->size > 1)
+            {
+                reglist_push(&regs[n++], b->arg1->reg);
+            }
+            else
+            {
+                EMIT_MOV64_OFF8_REG(REG_FRAME, get_register(b->arg1), -OBJ_SIZE * pos);
+                pos++;
+            }
+        }
+
+        i++;
     }
 
-    bite->reg = bite->arg1 ? bite->arg1->arg1->reg : reglist->reg[0];
-    debug("%s uses register %d from %s", bite->id, bite->reg,
-          bite->arg1 ? bite->arg1->arg1->id : "free register list");
-
-    for (int i = 0; i < len; i++)
+    if (bite->reg == -1)
     {
-        EMIT_MOV64_REG_OFF8(REG_RET, REG_FRAME, -OBJ_SIZE * (i + 1));
-        EMIT_MOV64_OFF8_REG(REG_ARGS, REG_RET, OBJ_SIZE * (len - i - 1));
+        bite->reg = reglist->reg[0];
+        debug("%s uses register %d from free register list", bite->id, bite->reg);
     }
 
-    FREE_STACK(OBJ_SIZE * len);
+    i = 0;
+    pos = 1;
+
+    for (Bite* b = bite->arg1; b; b = b->arg2)
+    {
+        if (!is_redundant_argument_move(b->arg1, len - i - 1))
+        {
+            if (reglist_in_use(b->arg1->reg))
+            {
+                EMIT_MOV64_OFF8_REG(REG_ARGS, get_register(b->arg1), OBJ_SIZE * (len - i - 1));
+            }
+            else
+            {
+                EMIT_MOV64_REG_OFF8(get_register(b->arg1), REG_FRAME, -OBJ_SIZE * pos);
+                EMIT_MOV64_OFF8_REG(REG_ARGS, get_register(b->arg1), OBJ_SIZE * (len - i - 1));
+                pos++;
+            }
+        }
+
+        i++;
+    }
+
+    if (len - redundant_moves > TEMP_REGISTERS)
+    {
+        FREE_STACK(OBJ_SIZE * (len - TEMP_REGISTERS));
+    }
 
     // The offset is patched after compilation is complete
     EMIT_JMP_OFF32();
     set_recursion_marker(*mem);
+
+    reglist_pop(prev);
 
     return true;
 }
