@@ -1643,9 +1643,16 @@ void define_builtins()
 {
     Env = new_scope(Nil);
 
+    // Constants
+    Object* sym = Nil;
+    PUSH1(sym);
+    sym = symbol("nil");
+    bind_value(Env, sym, Nil);
+    sym = symbol("t");
+    bind_value(Env, sym, True);
+    POP();
+
     // Minimal builtins
-    bind_value(Env, symbol("nil"), Nil);
-    bind_value(Env, symbol("t"), True);
     define_builtin_function("+", builtin_add);
     define_builtin_function("-", builtin_sub);
     define_builtin_function("<", builtin_less);
