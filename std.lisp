@@ -26,6 +26,12 @@
 ;; available native operations: addition and subtraction.
 ;;
 
+;; Returns the smaller of the two values
+(defun min (a b) (if (< a b) a b))
+
+;; Returns the larger of the two values
+(defun max (a b) (if (< a b) b a))
+
 ;; Helper for the mul function, uses an accumulator argument
 (defun mul_impl (a b acc)
   (if (eq b 0)
@@ -41,21 +47,21 @@
 ;; Helper for the largest_doubling function
 (defun largest-doubling_impl (a b acc)
    (if (< a (+ b b))
-      (cons b acc)
+      acc
       (largest-doubling_impl a (+ b b) (+ acc acc))))
 
 ;; Returns a cons cell with the largest multiple of b that is less than or equal
 ;; to a. The value itself is in car and the multiplier is in cdr.
 (defun largest-doubling (a b)
   (if (< a b)
-      (cons b 0)
+      0
       (largest-doubling_impl a b 1)))
 
 ;; Helper for the div function, uses an accumulator argument
-(defun div_impl (a b acc ld)
+(defun div_impl (a b acc times)
   (if (< a b)
       acc
-      (div_impl (- a (car ld)) b (+ acc (cdr ld)) (largest-doubling (- a (car ld)) b))))
+      (div_impl (- a (mul b (max times 1))) b (+ acc times) (largest-doubling (- a (mul b (max times 1))) b))))
 
 ;; Division of two numbers, very naive implementation
 (defun div (a b)
@@ -72,7 +78,7 @@
   (if (eq b 0)
       1
       (if (eq b 1)
-          (a)
+          a
           (pow_impl a (- b 1) a))))
 
 ;; Helper for the mod function, finds the largest doubling of b that's less than a
@@ -137,6 +143,6 @@
 
 ;; Compile all of the declared functions. This prevents the implementations and
 ;; builtins used by them from being overridden by the calling code.
-(compile not and or xor mul_impl mul largest-doubling_impl largest-doubling
+(compile not and or xor min max mul_impl mul largest-doubling_impl largest-doubling
          div_impl div pow_impl pow mod_impl mod length append mapcar nth
          fill fill_impl generate generate_impl loop write-list write-number)
