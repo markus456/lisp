@@ -1179,7 +1179,7 @@ Object* builtin_less(Object* scope, Object* args)
 
 }
 
-Object* builtin_quote(Object*, Object* args)
+Object* builtin_quote(Object* scope, Object* args)
 {
     if (CHECK1ARGS(args))
     {
@@ -1296,7 +1296,7 @@ Object* builtin_writechar(Object* scope, Object* args)
     return Nil;
 }
 
-Object* builtin_rand(Object*, Object*)
+Object* builtin_rand(Object* scope, Object* args)
 {
     return make_number(rand());
 }
@@ -1434,7 +1434,7 @@ Object* builtin_progn(Object* scope, Object* args)
     return ret;
 }
 
-Object* builtin_exit(Object*, Object*)
+Object* builtin_exit(Object* scope, Object* args)
 {
     is_running = false;
     return Nil;

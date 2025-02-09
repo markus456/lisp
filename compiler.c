@@ -2159,7 +2159,7 @@ void calculate_register_count(Bite* bite, bool left_leaf)
     }
 }
 
-bool generate_bytecode(uint8_t** mem, Object* /*scope*/, Object* /*name*/, Object* self, Object* params, Object* body)
+bool generate_bytecode(uint8_t** mem, Object* scope, Object* name, Object* self, Object* params, Object* body)
 {
     recursion_marker_count = 0;
 
