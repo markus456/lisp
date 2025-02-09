@@ -38,6 +38,7 @@ Object* builtin_sub(Object* scope, Object* args);
 Object* builtin_eq(Object* scope, Object* args);
 Object* builtin_car(Object* scope, Object* args);
 Object* builtin_cdr(Object* scope, Object* args);
+Object* builtin_progn(Object* scope, Object* args);
 
 bool is_supported_builtin(Function fn)
 {
@@ -47,7 +48,8 @@ bool is_supported_builtin(Function fn)
         || fn == builtin_sub
         || fn == builtin_eq
         || fn == builtin_car
-        || fn == builtin_cdr;
+        || fn == builtin_cdr
+        || fn == builtin_progn;
 
 }
 
@@ -256,6 +258,7 @@ enum BiteType {
     OP_LIST,
     OP_RECURSE,
     OP_CALL,
+    OP_PROGN,
 };
 
 int bite_ids;
@@ -339,7 +342,7 @@ Bite* bite_immediate(Bite** bites, Object* arg)
     return b;
 }
 
-Bite* bite_recursion(Bite** bites, Object* self, Object* params, Object* args)
+Bite* bite_list(Bite** bites, Object* self, Object* params, Object* args)
 {
     Bite* arglist = NULL;
 
@@ -352,31 +355,45 @@ Bite* bite_recursion(Bite** bites, Object* self, Object* params, Object* args)
         arglist = list;
     }
 
+    return arglist;
+}
+
+Bite* bite_recursion(Bite** bites, Object* self, Object* params, Object* args)
+{
     Bite* rec = make_bite(bites);
     rec->op = OP_RECURSE;
-    rec->arg1 = arglist;
+    rec->arg1 = bite_list(bites, self, params, args);
     rec->arg2 = (Bite*)func_body(self);
     return rec;
 }
 
 Bite* bite_call(Bite** bites, Object* self, Object* params, Object* func, Object* args)
 {
+    Bite* call = make_bite(bites);
+    call->op = OP_CALL;
+    call->arg1 = bite_list(bites, self, params, args);
+    call->arg2 = (Bite*)func_body(func);
+    return call;
+}
+
+Bite* bite_progn(Bite** bites, Object* self, Object* params, Object* args)
+{
     Bite* arglist = NULL;
 
     for (; args != Nil; args = cdr(args))
     {
+        bool is_last = cdr(args) == Nil;
         Bite* list = make_bite_impl(bites, "<list>");
         list->op = OP_LIST;
-        list->arg1 = bite_expr(bites, self, params, car(args));
+        list->arg1 = bite_expr_recurse(bites, self, params, car(args), is_last);
         list->arg2 = arglist;
         arglist = list;
     }
 
-    Bite* call = make_bite(bites);
-    call->op = OP_CALL;
-    call->arg1 = arglist;
-    call->arg2 = (Bite*)func_body(func);
-    return call;
+    Bite* progn = make_bite(bites);
+    progn->op = OP_PROGN;
+    progn->arg1 = arglist;
+    return progn;
 }
 
 Bite* bite_add(Bite** bites, Object* self, Object* params, Object* args)
@@ -547,6 +564,10 @@ Bite* bite_expr_recurse(Bite** bites, Object* self, Object* params, Object* obj,
             {
                 return bite_if(bites, self, params, cdr(obj));
             }
+            else if (get_obj(fn)->fn == builtin_progn)
+            {
+                return bite_progn(bites, self, params, cdr(obj));
+            }
             else
             {
                 error("Unknown builtin function");
@@ -641,23 +662,26 @@ void print_bite_if(Bite* bite)
     print_fixed("%s = %s ? %s : %s", bite->id, bite->arg1->id, bite->arg2->arg1->id, bite->arg2->arg2->id);
 }
 
-void print_bite_call_or_recurse(Bite* bite, const char* type)
+void print_bite_list_args(Bite* bite)
 {
-    printf("%s = %s(", bite->id, type);
-
-    for (Bite* b = bite->arg1; b; b = b->arg2)
+    if (bite->arg2)
     {
-        printf("%s", b->arg1->id);
-
-        if (b->arg2)
-        {
-            printf(", ");
-        }
+        print_bite_list_args(bite->arg2);
+        printf(", ");
     }
 
-    printf(")");
+    printf("%s", bite->arg1->id);
 }
 
+void print_bite_list(Bite* bite, const char* type)
+{
+    printf("%s = %s(", bite->id, type);
+    if (bite->arg1)
+    {
+        print_bite_list_args(bite->arg1);
+    }
+    printf(")");
+}
 
 void print_bite_norecurse(Bite* bite)
 {
@@ -691,10 +715,13 @@ void print_bite_norecurse(Bite* bite)
         print_bite_if(bite);
         break;
     case OP_RECURSE:
-        print_bite_call_or_recurse(bite, "recurse");
+        print_bite_list(bite, "recurse");
         break;
     case OP_CALL:
-        print_bite_call_or_recurse(bite, "call");
+        print_bite_list(bite, "call");
+        break;
+    case OP_PROGN:
+        print_bite_list(bite, "progn");
         break;
 
     case OP_BRANCH:
@@ -756,20 +783,25 @@ void print_one_bitecode(Bite* bite)
         break;
 
     case OP_RECURSE:
-        for (Bite* b = bite->arg1; b; b = b->arg2)
-        {
-            print_one_bitecode(b->arg1);
-        }
-
-        print_bite_call_or_recurse(bite, "recurse");
-        break;
     case OP_CALL:
+    case OP_PROGN:
         for (Bite* b = bite->arg1; b; b = b->arg2)
         {
             print_one_bitecode(b->arg1);
         }
 
-        print_bite_call_or_recurse(bite, "call");
+        switch (bite->op)
+        {
+        case OP_RECURSE:
+            print_bite_list(bite, "recurse");
+            break;
+        case OP_CALL:
+            print_bite_list(bite, "call");
+            break;
+        case OP_PROGN:
+            print_bite_list(bite, "progn");
+            break;
+        }
         break;
 
     case OP_BRANCH:
@@ -813,6 +845,7 @@ void mark_unprinted(Bite* bite)
 
     case OP_RECURSE:
     case OP_CALL:
+    case OP_PROGN:
         for (Bite* b = bite->arg1; b; b = b->arg2)
         {
             mark_unprinted(b->arg1);
@@ -1758,7 +1791,10 @@ bool bite_compile_recurse(uint8_t** mem, Bite* bite)
     {
         if (!is_redundant_argument_move(b->arg1, len - i - 1))
         {
-            bite_compile(mem, b->arg1);
+            if (!bite_compile(mem, b->arg1))
+            {
+                return false;
+            }
 
             if (bite->reg == -1)
             {
@@ -1822,6 +1858,28 @@ bool bite_compile_recurse(uint8_t** mem, Bite* bite)
     return true;
 }
 
+bool bite_compile_progn_arg(uint8_t** mem, Bite* bite)
+{
+    assert(bite->op == OP_LIST);
+
+    if (bite->arg2 && !bite_compile_progn_arg(mem, bite->arg2))
+    {
+        return false;
+    }
+
+    return bite_compile(mem, bite->arg1);
+}
+
+bool bite_compile_progn(uint8_t** mem, Bite* bite)
+{
+    bite_compile_progn_arg(mem, bite->arg1);
+    bite->reg = bite->arg1->arg1->reg;
+    debug("%s uses register %d from %s", bite->id, bite->reg, bite->arg1->arg1->id);
+
+    return true;
+
+}
+
 bool bite_compile(uint8_t** mem, Bite* bite)
 {
     switch (bite->op)
@@ -1854,6 +1912,9 @@ bool bite_compile(uint8_t** mem, Bite* bite)
 
     case OP_RECURSE:
         return bite_compile_recurse(mem, bite);
+
+    case OP_PROGN:
+        return bite_compile_progn(mem, bite);
 
     case OP_BRANCH:
     case OP_LIST:
@@ -1980,6 +2041,7 @@ Bite* fold_constants(Bite* bite)
 
     case OP_RECURSE:
     case OP_CALL:
+    case OP_PROGN:
         for (Bite* b = bite->arg1; b; b = b->arg2)
         {
             b->arg1 = fold_constants(b->arg1);
@@ -2045,6 +2107,7 @@ void recurse_bites(Bite* bite, RecurseBiteFunc func, int depth)
 
     case OP_RECURSE:
     case OP_CALL:
+    case OP_PROGN:
         for (Bite* b = bite->arg1; b; b = b->arg2)
         {
             recurse_bites(b->arg1, func, depth + 1);
@@ -2135,6 +2198,7 @@ void calculate_register_count(Bite* bite, bool left_leaf)
 
     case OP_RECURSE:
     case OP_CALL:
+    case OP_PROGN:
         {
             int reg_count = 1;
 
