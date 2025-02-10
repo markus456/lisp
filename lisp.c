@@ -501,6 +501,25 @@ void define_constant(const char* name, Object* value)
     POP();
 }
 
+void do_writechar(Object* obj)
+{
+    if (get_type(obj) == TYPE_NUMBER)
+    {
+        unsigned char ch = get_number(obj);
+        fwrite(&ch, 1, 1, stdout);
+    }
+    else if (get_type(obj) == TYPE_SYMBOL)
+    {
+        const char* sym = get_symbol(obj);
+        fwrite(sym, strlen(sym), 1, stdout);
+    }
+    else
+    {
+        error("'write-char' takes a symbol or a number as its argument.");
+        print(obj);
+    }
+}
+
 void print_scope(Object* scope)
 {
     int num_scopes = 0;
@@ -1275,22 +1294,7 @@ Object* builtin_writechar(Object* scope, Object* args)
     else
     {
         Object* obj = eval(scope, car(args));
-
-        if (get_type(obj) == TYPE_NUMBER)
-        {
-            unsigned char ch = get_number(obj);
-            fwrite(&ch, 1, 1, stdout);
-        }
-        else if (get_type(obj) == TYPE_SYMBOL)
-        {
-            const char* sym = get_symbol(obj);
-            fwrite(sym, strlen(sym), 1, stdout);
-        }
-        else
-        {
-            error("'write-char' takes a symbol or a number as its argument.");
-            print(obj);
-        }
+        do_writechar(obj);
     }
 
     return Nil;

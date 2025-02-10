@@ -25,7 +25,7 @@ make demo
 - Symbols must be less than 1024 characters long.
 
 - Rudimentary compilation into x86-64 bytecode is supported by the `compile`
-  function.
+  function. See the `Lisp Compilation` section for more information.
 
 ### Special Forms (builtin functions)
 
@@ -103,6 +103,41 @@ make demo
 
 - `debug`: If the first argument is non-nil, debug mode is turned on. Only in
   debug builds.
+
+## Lisp Compilation
+
+Lisp functions can be compiled into x86_64 machine code with the `compile`
+builtin. The compilation only works for functions that do not allocate memory
+and that only call other compiled functions or are self-recursive. Both
+tail-position recursion and non-tail-position recursion works but the latter
+will be translated into a function call and thus it'll use up the stack space.
+
+The order of compilation matters. The compilation of the function only succeeds
+if all of the functions that it calls have already been compiled. The exception
+to this is of course self-recursion which is handled separately.
+
+The following is an example of a function that will compile:
+
+```
+(foo (a) (+ a a))
+(bar (a b) (- (foo a) b))
+
+;; foo must be compiled before bar
+(compile foo)
+(compile bar)
+```
+
+And here's an example that won't as the leaf function uses `cons`.
+
+```
+(push-one (a) (cons 1 a))
+(dumb-add (a b) (+ (car (foo a) 2)))
+
+;; Will fail as it uses 'cons'
+(compile push-one)
+;; Will fail as it uses 'push-one'
+(compile dumb-add)
+```
 
 # Building
 

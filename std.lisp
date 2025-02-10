@@ -135,7 +135,11 @@
 ;;
 
 ;; Writes a list of numbers as unsigned bytes to stdout
-(defun write-list (lst) (progn (mapcar write-char lst) nil))
+(defun write-list (lst)
+  (if (eq lst nil)
+      nil
+      (progn (write-char (car lst))
+             (write-list (cdr lst)))))
 
 ;; Writes a list of numbers in base ten (i.e. pretty-printed) to stdout
 (defun write-number (n)

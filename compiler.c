@@ -39,6 +39,7 @@ Object* builtin_eq(Object* scope, Object* args);
 Object* builtin_car(Object* scope, Object* args);
 Object* builtin_cdr(Object* scope, Object* args);
 Object* builtin_progn(Object* scope, Object* args);
+Object* builtin_writechar(Object* scope, Object* args);
 
 bool is_supported_builtin(Function fn)
 {
@@ -49,8 +50,14 @@ bool is_supported_builtin(Function fn)
         || fn == builtin_eq
         || fn == builtin_car
         || fn == builtin_cdr
-        || fn == builtin_progn;
+        || fn == builtin_progn
+        || fn == builtin_writechar;
 
+}
+
+void compiled_writechar(Object* obj)
+{
+    do_writechar(obj);
 }
 
 bool compile_expr(uint8_t** mem, Object* self, Object* params, Object* body);
@@ -259,6 +266,7 @@ enum BiteType {
     OP_RECURSE,
     OP_CALL,
     OP_PROGN,
+    OP_WRITECHAR,
 };
 
 int bite_ids;
@@ -513,6 +521,15 @@ Bite* bite_if(Bite** bites, Object* self, Object* params, Object* args)
     return if_bite;
 }
 
+Bite* bite_writechar(Bite** bites, Object* self, Object* params, Object* args)
+{
+    Bite* val = bite_expr(bites, self, params, car(args));
+    Bite* b = make_bite(bites);
+    b->op = OP_WRITECHAR;
+    b->arg1 = val;
+    return b;
+}
+
 Bite* bite_expr_recurse(Bite** bites, Object* self, Object* params, Object* obj, bool can_recurse)
 {
     switch (get_type(obj))
@@ -567,6 +584,10 @@ Bite* bite_expr_recurse(Bite** bites, Object* self, Object* params, Object* obj,
             else if (get_obj(fn)->fn == builtin_progn)
             {
                 return bite_progn(bites, self, params, cdr(obj));
+            }
+            else if (get_obj(fn)->fn == builtin_writechar)
+            {
+                return bite_writechar(bites, self, params, cdr(obj));
             }
             else
             {
@@ -642,6 +663,11 @@ void print_bite_neg(Bite* bite)
     print_fixed("%s = -%s", bite->id, bite->arg1->id);
 }
 
+void print_bite_writechar(Bite* bite)
+{
+    print_fixed("%s = write(%s)", bite->id, bite->arg1->id);
+}
+
 void print_bite_less(Bite* bite)
 {
     print_fixed("%s = %s < %s", bite->id, bite->arg1->id, bite->arg2->id);
@@ -702,6 +728,9 @@ void print_bite_norecurse(Bite* bite)
     case OP_NEG:
         print_bite_neg(bite);
         break;
+    case OP_WRITECHAR:
+        print_bite_writechar(bite);
+        break;
     case OP_LESS:
         print_bite_less(bite);
         break;
@@ -759,6 +788,10 @@ void print_one_bitecode(Bite* bite)
     case OP_NEG:
         print_one_bitecode(bite->arg1);
         print_bite_neg(bite);
+        break;
+    case OP_WRITECHAR:
+        print_one_bitecode(bite->arg1);
+        print_bite_writechar(bite);
         break;
     case OP_LESS:
         print_one_bitecode(bite->arg1);
@@ -834,6 +867,7 @@ void mark_unprinted(Bite* bite)
 
     case OP_NEG:
     case OP_PTR:
+    case OP_WRITECHAR:
         mark_unprinted(bite->arg1);
         break;
 
@@ -1520,7 +1554,7 @@ bool bite_compile_cmp_tail(uint8_t** mem, Bite* bite, int op)
 {
     assert(op == OP_EQ || op == OP_LESS);
 
-    EMIT_MOV64_REG_IMM64(get_register(bite), (intptr_t)True);
+    EMIT_MOV64_REG_IMM32(get_register(bite), (intptr_t)True);
 
     if (op == OP_EQ)
     {
@@ -1532,7 +1566,7 @@ bool bite_compile_cmp_tail(uint8_t** mem, Bite* bite, int op)
     }
     uint8_t* jump_start = *mem;
 
-    EMIT_MOV64_REG_IMM64(get_register(bite), (intptr_t)Nil);
+    EMIT_MOV64_REG_IMM32(get_register(bite), (intptr_t)Nil);
     uint8_t* jump_end = *mem;
     PATCH_JMP8(jump_start, jump_end - jump_start);
 
@@ -1874,10 +1908,39 @@ bool bite_compile_progn(uint8_t** mem, Bite* bite)
 {
     bite_compile_progn_arg(mem, bite->arg1);
     bite->reg = bite->arg1->arg1->reg;
-    debug("%s uses register %d from %s", bite->id, bite->reg, bite->arg1->arg1->id);
+    debug("%s uses register %d from %s", bite->id, bite->reg, bite->arg1->id);
 
     return true;
 
+}
+
+bool bite_compile_writechar(uint8_t** mem, Bite* bite)
+{
+    bite_compile(mem, bite->arg1);
+    bite->reg = bite->arg1->reg;
+    debug("%s uses register %d from %s", bite->id, bite->reg, bite->arg1->id);
+
+    EMIT_PUSH(REG_ARGS);
+
+    if (reglist_in_use(REG_RET))
+    {
+        EMIT_PUSH(REG_RET);
+    }
+
+    EMIT_MOV64_REG_REG(REG_ARGS, get_register(bite->arg1));
+    EMIT_MOV64_REG_IMM64(REG_RET, (intptr_t)compiled_writechar);
+    EMIT_CALL_REG(REG_RET);
+
+    if (reglist_in_use(REG_RET))
+    {
+        EMIT_POP(REG_RET);
+    }
+
+    EMIT_POP(REG_ARGS);
+
+    EMIT_MOV64_REG_IMM32(get_register(bite), (intptr_t)Nil);
+
+    return true;
 }
 
 bool bite_compile(uint8_t** mem, Bite* bite)
@@ -1915,6 +1978,9 @@ bool bite_compile(uint8_t** mem, Bite* bite)
 
     case OP_PROGN:
         return bite_compile_progn(mem, bite);
+
+    case OP_WRITECHAR:
+        return bite_compile_writechar(mem, bite);
 
     case OP_BRANCH:
     case OP_LIST:
@@ -2030,6 +2096,7 @@ Bite* fold_constants(Bite* bite)
 
     case OP_NEG:
     case OP_PTR:
+    case OP_WRITECHAR:
         bite->arg1 = fold_constants(bite->arg1);
         break;
 
@@ -2096,6 +2163,7 @@ void recurse_bites(Bite* bite, RecurseBiteFunc func, int depth)
 
     case OP_NEG:
     case OP_PTR:
+    case OP_WRITECHAR:
         recurse_bites(bite->arg1, func, depth + 1);
         break;
 
@@ -2186,6 +2254,7 @@ void calculate_register_count(Bite* bite, bool left_leaf)
 
     case OP_NEG:
     case OP_PTR:
+    case OP_WRITECHAR:
         calculate_register_count(bite->arg1, true);
         bite->reg_count = bite->arg1->reg_count;
         break;

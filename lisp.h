@@ -167,6 +167,8 @@ Object* cdr(Object* obj);
 Object* eval(Object* scope, Object* obj);
 int length(Object* list);
 
+void do_writechar(Object* obj);
+
 bool debug_on();
 
 void print(Object* obj);

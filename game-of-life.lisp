@@ -9,6 +9,9 @@
 (defvar alive 48)
 (defvar dead 32)
 (defvar escape 27)
+(defvar lbracket 91)
+(defvar H 72)
+(defvar J 74)
 
 ;;
 ;; Printing of game state
@@ -30,11 +33,16 @@
 
 ;; Moves the cursor to the top left of the screen
 (defun reset_cursor ()
-  (write-list '(escape '[ 'H)))
+  (progn (write-char escape)
+         (write-char lbracket)
+         (write-char H)))
 
 ;; Clears the screen and moves the cursor to the top left
 (defun clear_screen ()
-  (progn (write-list '(escape '[ 50 'J))
+  (progn (write-char escape)
+         (write-char lbracket)
+         (write-char 50)
+         (write-char J)
          (reset_cursor)))
 
 ;; (defun reset_cursor ()
@@ -117,10 +125,10 @@
 (compile compute_cell_state)
 (compile create_start_state)
 (compile main_loop)
-(compile clear_screen)
 (compile reset_cursor)
-(compile print_state)
+(compile clear_screen)
 (compile print_row)
+(compile print_state)
 
 ;; Start the program
 (clear_screen)

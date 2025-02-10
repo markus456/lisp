@@ -74,6 +74,9 @@
 // MOV: a = b[off] (load)
 #define EMIT_MOV64_REG_OFF8(a, b, off) EMIT(REX_W); EMIT(0x8b); EMIT(0x40 | OP_REG(a) | OP_RM(b)); EMIT(off);
 
+// MOV: a = imm32
+#define EMIT_MOV64_REG_IMM32(a, imm) EMIT(0xb8 + a); EMIT_IMM32(imm);
+
 // MOV: a = imm64
 #define EMIT_MOV64_REG_IMM64(a, imm) EMIT(REX_W); EMIT(0xb8 + a); EMIT_IMM64(imm);
 
