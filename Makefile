@@ -15,4 +15,4 @@ clean:
 	rm lisp
 
 demo: release
-	./lisp -q < game-of-life.lisp
+	time -f 'time: %e' ./lisp -q < game-of-life.lisp
