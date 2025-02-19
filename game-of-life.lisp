@@ -61,14 +61,20 @@
 (defun get_xy(grid x y)
   (nth (nth grid (wrap y screen_height)) (wrap x screen_width)))
 
+;; Sums up three adjacent values in a row
+(defun triplet (row x)
+  (if (eq x 0)
+      (+ (car row) (car (cdr row)) (car (cdr (cdr row))))
+      (triplet (cdr row) (- x 1))))
+
 ;; Get the next state of this cell based on the sum of neighbors and 
 (defun compute_cell_result (sum self)
   (if (eq self 1)
       (if (or (eq sum 2) (eq sum 3)) 1 0)
       (if (eq sum 3) 1 0)))
 
-;; The values of all neighbor cells
-(defun get_neighbours (st x y)
+;; Slow approach for the corner cases
+(defun get_neighbours_slow (st x y)
   (+ (get_xy st (- x 1) (- y 1))
      (get_xy st x       (- y 1))
      (get_xy st (+ x 1) (- y 1))
@@ -77,6 +83,31 @@
      (get_xy st (- x 1) (+ y 1))
      (get_xy st x       (+ y 1))
      (get_xy st (+ x 1) (+ y 1))))
+
+;; For cases where there's no wrapping, can be calculated by traversing the list once
+(defun get_neighbours_fast (st x y)
+   (if (eq y 0)
+       (+ (triplet (car st) x)
+          (nth (car (cdr st)) x)
+          (nth (car (cdr st)) (+ x 2))
+          (triplet (car (cdr (cdr st))) x))
+       (get_neighbours_fast (cdr st) x (- y 1))))
+
+;; Checks if this coordinate can be evaluated by traversing the list only once
+(defun not_fast (x y x_lim y_lim)
+  (if (< (- y_lim 4) y)
+      t
+      (if (< y 1)
+          t
+          (if (< (- x_lim 4) x)
+              t
+              (< x 1)))))
+
+;; The values of all neighbor cells
+(defun get_neighbours (st x y)
+  (if (not_fast x y screen_width screen_height)
+      (get_neighbours_slow st x y)
+      (get_neighbours_fast st (- x 1) (- y 1))))
 
 ;; Main cell state computation
 (defun compute_cell (st x y)
@@ -107,10 +138,13 @@
              (main_loop (compute_cell_state state nil nil (- screen_width 1) (- screen_height 1)) (+ iter 1)))))
 
 ;; Compile all of the functions
-
 (compile wrap)
 (compile get_xy)
+(compile triplet)
 (compile compute_cell_result)
+(compile get_neighbours_fast)
+(compile get_neighbours_slow)
+(compile not_fast)
 (compile get_neighbours)
 (compile compute_cell)
 (compile compute_cell_state)
