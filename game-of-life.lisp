@@ -45,15 +45,6 @@
          (write-char J)
          (reset_cursor)))
 
-;; (defun reset_cursor ()
-;;   (progn (write-char escape)
-;;          (write-char '[)
-;;          (write-number (+ screen_height 1))
-;;          (write-char 'F)
-;;          (write-char escape)
-;;          (write-char '[)
-;;          (write-char 'J)))
-
 ;;
 ;; Game state computation
 ;;
