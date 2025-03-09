@@ -33,16 +33,11 @@
 
 ;; Moves the cursor to the top left of the screen
 (defun reset_cursor ()
-  (progn (write-char escape)
-         (write-char lbracket)
-         (write-char H)))
+  (write-char escape lbracket H))
 
 ;; Clears the screen and moves the cursor to the top left
 (defun clear_screen ()
-  (progn (write-char escape)
-         (write-char lbracket)
-         (write-char 50)
-         (write-char J)
+  (progn (write-char escape lbracket 50 J)
          (reset_cursor)))
 
 ;;
