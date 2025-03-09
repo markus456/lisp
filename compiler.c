@@ -1,8 +1,6 @@
-#define _GNU_SOURCE
-#include <dlfcn.h>
-
 #include "compiler.h"
 #include "lisp.h"
+#include <dlfcn.h>
 
 // Only x86-64 is supported currently
 #include "impl/x86_64.h"

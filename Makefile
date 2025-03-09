@@ -15,4 +15,9 @@ clean:
 	rm lisp
 
 demo: release
-	time -f 'time: %e' ./lisp -q < game-of-life.lisp
+	time -f 'time: %e' ./lisp -q < demos/game-of-life.lisp
+
+game_of_life: demo
+
+rule110: release
+	./lisp -q < demos/rule110.lisp

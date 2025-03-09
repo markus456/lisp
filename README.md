@@ -93,6 +93,8 @@ make demo
 
 - `write-char`: Writes the input to stdout as unsigned bytes.
 
+- `sleep`: Sleep for the given amount of milliseconds.
+
 - `rand`: Return a "random" number. This uses the C `rand()` function seeded to
   the current time so it's not a very reliable source of randomness.
 

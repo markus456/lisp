@@ -1,5 +1,6 @@
 #include "lisp.h"
 #include "compiler.h"
+#include <time.h>
 
 #define MAX_SYMBOL_LEN 1024
 
@@ -1300,6 +1301,33 @@ Object* builtin_writechar(Object* scope, Object* args)
     return Nil;
 }
 
+Object* builtin_sleep(Object* scope, Object* args)
+{
+    if (CHECK1ARGS(args))
+    {
+        error("'sleep' takes exactly one number as its argument.");
+    }
+    else
+     {
+         Object* obj = eval(scope, car(args));
+
+         if (get_type(obj) != TYPE_NUMBER)
+         {
+             error("'sleep' takes exactly one number as its argument.");
+         }
+         else
+         {
+             int64_t num = get_number(obj);
+             struct timespec dur;
+             dur.tv_sec = num / 1000;
+             dur.tv_nsec = num * 1000000;
+             nanosleep(&dur, NULL);
+         }
+     }
+
+     return Nil;
+}
+
 Object* builtin_rand(Object* scope, Object* args)
 {
     return make_number(rand());
@@ -1683,6 +1711,7 @@ void define_builtins()
     // Debug, OS, etc.
     define_builtin_function("print", builtin_print);
     define_builtin_function("write-char", builtin_writechar);
+    define_builtin_function("sleep", builtin_sleep);
     define_builtin_function("rand", builtin_rand);
     define_builtin_function("load", builtin_load);
     define_builtin_function("exit", builtin_exit);
