@@ -1287,16 +1287,16 @@ Object* builtin_print(Object* scope, Object* args)
 
 Object* builtin_writechar(Object* scope, Object* args)
 {
-    if (CHECK1ARGS(args))
-    {
-        error("'write-char' takes exactly one argument.");
-    }
-    else
+    PUSH2(scope, args);
+
+    while (args != Nil)
     {
         Object* obj = eval(scope, car(args));
         do_writechar(obj);
+        args = cdr(args);
     }
 
+    POP();
     return Nil;
 }
 

@@ -523,10 +523,9 @@ Bite* bite_if(Bite** bites, Object* self, Object* params, Object* args)
 
 Bite* bite_writechar(Bite** bites, Object* self, Object* params, Object* args)
 {
-    Bite* val = bite_expr(bites, self, params, car(args));
     Bite* b = make_bite(bites);
     b->op = OP_WRITECHAR;
-    b->arg1 = val;
+    b->arg1 = bite_list(bites, self, params, args);
     return b;
 }
 
@@ -728,9 +727,6 @@ void print_bite_norecurse(Bite* bite)
     case OP_NEG:
         print_bite_neg(bite);
         break;
-    case OP_WRITECHAR:
-        print_bite_writechar(bite);
-        break;
     case OP_LESS:
         print_bite_less(bite);
         break;
@@ -751,6 +747,9 @@ void print_bite_norecurse(Bite* bite)
         break;
     case OP_PROGN:
         print_bite_list(bite, "progn");
+        break;
+    case OP_WRITECHAR:
+        print_bite_list(bite, "write-char");
         break;
 
     case OP_BRANCH:
@@ -789,10 +788,6 @@ void print_one_bitecode(Bite* bite)
         print_one_bitecode(bite->arg1);
         print_bite_neg(bite);
         break;
-    case OP_WRITECHAR:
-        print_one_bitecode(bite->arg1);
-        print_bite_writechar(bite);
-        break;
     case OP_LESS:
         print_one_bitecode(bite->arg1);
         print_one_bitecode(bite->arg2);
@@ -818,6 +813,7 @@ void print_one_bitecode(Bite* bite)
     case OP_RECURSE:
     case OP_CALL:
     case OP_PROGN:
+    case OP_WRITECHAR:
         for (Bite* b = bite->arg1; b; b = b->arg2)
         {
             print_one_bitecode(b->arg1);
@@ -833,6 +829,9 @@ void print_one_bitecode(Bite* bite)
             break;
         case OP_PROGN:
             print_bite_list(bite, "progn");
+            break;
+        case OP_WRITECHAR:
+            print_bite_list(bite, "write-char");
             break;
         }
         break;
@@ -867,7 +866,6 @@ void mark_unprinted(Bite* bite)
 
     case OP_NEG:
     case OP_PTR:
-    case OP_WRITECHAR:
         mark_unprinted(bite->arg1);
         break;
 
@@ -880,6 +878,7 @@ void mark_unprinted(Bite* bite)
     case OP_RECURSE:
     case OP_CALL:
     case OP_PROGN:
+    case OP_WRITECHAR:
         for (Bite* b = bite->arg1; b; b = b->arg2)
         {
             mark_unprinted(b->arg1);
@@ -1914,11 +1913,19 @@ bool bite_compile_progn(uint8_t** mem, Bite* bite)
 
 }
 
-bool bite_compile_writechar(uint8_t** mem, Bite* bite)
+bool bite_compile_writechar_arg(uint8_t** mem, Bite* bite)
 {
-    bite_compile(mem, bite->arg1);
-    bite->reg = bite->arg1->reg;
-    debug("%s uses register %d from %s", bite->id, bite->reg, bite->arg1->id);
+    assert(bite->op == OP_LIST);
+
+    if (bite->arg2 && !bite_compile_writechar_arg(mem, bite->arg2))
+    {
+        return false;
+    }
+
+    if (!bite_compile(mem, bite->arg1))
+    {
+        return false;
+    }
 
     EMIT_PUSH(REG_ARGS);
 
@@ -1937,6 +1944,14 @@ bool bite_compile_writechar(uint8_t** mem, Bite* bite)
     }
 
     EMIT_POP(REG_ARGS);
+    return true;
+}
+
+bool bite_compile_writechar(uint8_t** mem, Bite* bite)
+{
+    bite_compile_writechar_arg(mem, bite->arg1);
+    bite->reg = bite->arg1->arg1->reg;
+    debug("%s uses register %d from %s", bite->id, bite->reg, bite->arg1->id);
 
     EMIT_MOV64_REG_IMM32(get_register(bite), (intptr_t)Nil);
 
@@ -2096,7 +2111,6 @@ Bite* fold_constants(Bite* bite)
 
     case OP_NEG:
     case OP_PTR:
-    case OP_WRITECHAR:
         bite->arg1 = fold_constants(bite->arg1);
         break;
 
@@ -2109,6 +2123,7 @@ Bite* fold_constants(Bite* bite)
     case OP_RECURSE:
     case OP_CALL:
     case OP_PROGN:
+    case OP_WRITECHAR:
         for (Bite* b = bite->arg1; b; b = b->arg2)
         {
             b->arg1 = fold_constants(b->arg1);
@@ -2163,7 +2178,6 @@ void recurse_bites(Bite* bite, RecurseBiteFunc func, int depth)
 
     case OP_NEG:
     case OP_PTR:
-    case OP_WRITECHAR:
         recurse_bites(bite->arg1, func, depth + 1);
         break;
 
@@ -2176,6 +2190,7 @@ void recurse_bites(Bite* bite, RecurseBiteFunc func, int depth)
     case OP_RECURSE:
     case OP_CALL:
     case OP_PROGN:
+    case OP_WRITECHAR:
         for (Bite* b = bite->arg1; b; b = b->arg2)
         {
             recurse_bites(b->arg1, func, depth + 1);
@@ -2254,7 +2269,6 @@ void calculate_register_count(Bite* bite, bool left_leaf)
 
     case OP_NEG:
     case OP_PTR:
-    case OP_WRITECHAR:
         calculate_register_count(bite->arg1, true);
         bite->reg_count = bite->arg1->reg_count;
         break;
@@ -2268,6 +2282,7 @@ void calculate_register_count(Bite* bite, bool left_leaf)
     case OP_RECURSE:
     case OP_CALL:
     case OP_PROGN:
+    case OP_WRITECHAR:
         {
             int reg_count = 1;
 
