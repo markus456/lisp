@@ -60,6 +60,17 @@ enum Type {
 struct Object;
 typedef struct Object Object;
 typedef struct Object* (*Function) (struct Object*, struct Object*);
+struct UserFunction;
+typedef struct UserFunction UserFunction;
+
+struct UserFunction
+{
+    Object* func_params;
+    Object* func_body;
+    Object* func_env;
+    void*   jit_mem; // Stores the JIT compiled code
+    uint8_t compiled;
+};
 
 struct Object
 {
@@ -74,25 +85,20 @@ struct Object
 
     union
     {
-        // Cons cell
+        // Cons cell (TYPE_CELL)
         struct {
             Object* car;
             Object* cdr;
         };
 
-        // Symbol
+        // Symbol (TYPE_SYMBOL)
         char name[1];
 
-        // Builtin function
+        // Builtin function (TYPE_BUILTIN)
         Function fn;
 
-        // Custom functions
-        struct {
-            Object* func_params;
-            Object* func_body;
-            Object* func_env;
-            uint8_t compiled;
-        };
+        // Custom functions (TYPE_FUNCTION)
+        UserFunction ufn;
 
         // The special value where the return value is stashed for tail calls
         struct {
@@ -155,9 +161,12 @@ Object* get_func(Object* obj);
 Object* get_builtin(Object* obj);
 
 const char* get_symbol(Object* obj);
+const char* get_symbol_by_pointed_value(Object* val);
+
 int64_t get_number(Object* obj);
 Object* func_params(Object* obj);
 Object* func_body(Object* obj);
+uint8_t* func_jit_mem(Object* obj);
 Object* symbol_lookup(Object* scope, Object* sym);
 Object* make_ptr(Object* obj, enum Type type);
 Object* make_number(int64_t val);

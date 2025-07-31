@@ -23,22 +23,19 @@ Object* get_obj(Object* obj)
 Object* get_cell(Object* obj)
 {
     assert(get_type(obj) == TYPE_CELL);
-    intptr_t p = (intptr_t)obj;
-    return (Object*)(p - TYPE_CELL);
+    return get_obj(obj);
 }
 
 Object* get_func(Object* obj)
 {
-    assert(get_type(obj) == TYPE_FUNCTION);
-    intptr_t p = (intptr_t)obj;
-    return (Object*)(p - TYPE_FUNCTION);
+    assert(get_type(obj) == TYPE_FUNCTION || get_type(obj) == TYPE_MACRO);
+    return get_obj(obj);
 }
 
 Object* get_builtin(Object* obj)
 {
     assert(get_type(obj) == TYPE_BUILTIN);
-    intptr_t p = (intptr_t)obj;
-    return (Object*)(p - TYPE_BUILTIN);
+    return get_obj(obj);
 }
 
 int get_stored_type(Object* obj)
@@ -96,18 +93,23 @@ void error(const char* fmt, ...)
     printf("\n");
 }
 
+// The debug levels
+#define DBG_INFO 1
+#define DBG_EXTRA 2
+
+int debug_level = 0;
+
+#define DEBUG_INFO (debug_level >= 1)
+#define DEBUG_EXTRA (debug_level >= 2)
+
 #ifdef NDEBUG
-#define is_debug false
-#define is_stack_trace false
 void debug(const char*, ...)
 {
 }
 #else
-bool is_debug = false;
-bool is_stack_trace = false;
 void debug(const char* fmt, ...)
 {
-    if (is_debug)
+    if (debug_level > DBG_INFO)
     {
         va_list args;
         va_start(args, fmt);
@@ -120,7 +122,7 @@ void debug(const char* fmt, ...)
 
 bool debug_on()
 {
-    return is_debug;
+    return debug_level > 0;
 }
 
 // Memory allocation and object sizes
@@ -146,7 +148,7 @@ size_t type_size(enum Type type)
         return allocation_size(BASE_SIZE + sizeof(Object*) * 2);
     case TYPE_FUNCTION:
     case TYPE_MACRO:
-        return allocation_size(BASE_SIZE + sizeof(Object*) * 3 + sizeof(bool));
+        return allocation_size(BASE_SIZE + sizeof(UserFunction));
     case TYPE_BUILTIN:
         return allocation_size(BASE_SIZE + sizeof(Function));
     case TYPE_NUMBER:
@@ -222,9 +224,9 @@ void fix_references(Object* obj)
 
     case TYPE_FUNCTION:
     case TYPE_MACRO:
-        obj->func_params = make_living(obj->func_params);
-        obj->func_body = make_living(obj->func_body);
-        obj->func_env = make_living(obj->func_env);
+        obj->ufn.func_params = make_living(obj->ufn.func_params);
+        obj->ufn.func_body = make_living(obj->ufn.func_body);
+        obj->ufn.func_env = make_living(obj->ufn.func_env);
         break;
 
     case TYPE_NUMBER:
@@ -393,10 +395,11 @@ Object* make_function(Object* params, Object* body, Object* env)
     PUSH3(params, body, env);
     Object* rv = allocate(type_size(TYPE_FUNCTION));
     rv->moved = (Object*)TYPE_FUNCTION;
-    rv->func_params = params;
-    rv->func_body = body;
-    rv->func_env = env;
-    rv->compiled = 0;
+    rv->ufn.func_params = params;
+    rv->ufn.func_body = body;
+    rv->ufn.func_env = env;
+    rv->ufn.jit_mem = NULL;
+    rv->ufn.compiled = 0;
     POP();
     return make_ptr(rv, TYPE_FUNCTION);
 }
@@ -404,19 +407,24 @@ Object* make_function(Object* params, Object* body, Object* env)
 Object* func_body(Object* obj)
 {
     assert(get_type(obj) == TYPE_FUNCTION || get_type(obj) == TYPE_MACRO);
-    return get_func(obj)->func_body;
+    return get_func(obj)->ufn.func_body;
+}
+
+uint8_t* func_jit_mem(Object* obj)
+{
+    return get_func(obj)->ufn.jit_mem;
 }
 
 Object* func_params(Object* obj)
 {
     assert(get_type(obj) == TYPE_FUNCTION || get_type(obj) == TYPE_MACRO);
-    return get_func(obj)->func_params;
+    return get_func(obj)->ufn.func_params;
 }
 
 Object* func_env(Object* obj)
 {
     assert(get_type(obj) == TYPE_FUNCTION || get_type(obj) == TYPE_MACRO);
-    return get_func(obj)->func_env;
+    return get_func(obj)->ufn.func_env;
 }
 
 Object* new_scope(Object* prev_scope)
@@ -443,7 +451,7 @@ Object* symbol(const char* name)
 
 void bind_value(Object* scope, Object* symbol, Object* value)
 {
-    if (is_debug)
+    if (DEBUG_INFO)
     {
         printf("Binding '%s' to ", get_symbol(symbol));
         print(value);
@@ -549,7 +557,7 @@ Object* symbol_lookup(Object* scope, Object* sym)
 
             if (key == sym)
             {
-                if (is_debug)
+                if (DEBUG_EXTRA)
                 {
                     printf("Symbol '%s' points to ", get_symbol(key));
                     print(cdr(kv));
@@ -562,6 +570,29 @@ Object* symbol_lookup(Object* scope, Object* sym)
 
     return Undefined;
 }
+
+const char* get_symbol_by_pointed_value(Object* val)
+{
+    Object* scope = Env;
+
+    for (Object* s = scope; s != Nil; s = cdr(s))
+    {
+        for (Object* o = car(s); o != Nil; o = cdr(o))
+        {
+            Object* kv = car(o);
+            assert(get_type(kv) == TYPE_CELL);
+            Object* key = car(kv);
+
+            if (cdr(kv) == val)
+            {
+                return get_symbol(key);
+            }
+        }
+    }
+
+    return NULL;
+}
+
 
 void print_one(Object* obj)
 {
@@ -605,15 +636,17 @@ void print_one(Object* obj)
         }
         break;
     case TYPE_FUNCTION:
-        if (get_func(obj)->compiled)
+        if (get_func(obj)->ufn.compiled)
         {
-            printf("<compiled func> ");
+            printf("<compiled:%s>", get_symbol_by_pointed_value(obj));
         }
         else
         {
-            printf("<func> ");
-            if (is_debug)
+            printf("<func:%s>", get_symbol_by_pointed_value(obj));
+
+            if (DEBUG_INFO)
             {
+                printf(": ");
                 print_one(func_params(obj));
                 print_one(func_body(obj));
             }
@@ -623,7 +656,7 @@ void print_one(Object* obj)
         printf("<macro> ");
         break;
     case TYPE_BUILTIN:
-        printf("<builtin> ");
+        printf("<builtin:%s> ", get_symbol_by_pointed_value(obj));
         break;
     default:
         assert(false);
@@ -639,7 +672,7 @@ void print(Object* obj)
 
 void debug_print(Object* obj)
 {
-    if (is_debug)
+    if (DEBUG_INFO)
     {
         print_one(obj);
         printf("\n");
@@ -869,7 +902,7 @@ Object* parse_expr()
 
 Object* expand_macro(Object* scope, Object* macro, Object* args)
 {
-    Object* param = get_obj(macro)->func_params;
+    Object* param = func_params(macro);
     PUSH4(macro, param, args, scope);
     scope = new_scope(scope);
 
@@ -907,7 +940,7 @@ Object* expand_macro(Object* scope, Object* macro, Object* args)
     }
     else
     {
-        ret = eval(scope, get_obj(macro)->func_body);
+        ret = eval(scope, func_body(macro));
     }
 
     POP();
@@ -967,7 +1000,7 @@ Object* eval_cell(Object* scope, Object* obj)
                   get_type(sym) == TYPE_SYMBOL ? get_symbol(sym) : "<func>",
                   length(func_params(fn)), length(cdr(obj)));
         }
-        else if (get_func(fn)->compiled == COMPILE_CODE)
+        else if (get_func(fn)->ufn.compiled == COMPILE_CODE)
         {
             // The arguments to the function are bound to the newest scope.
             ret = jit_eval(fn, car(next_scope));
@@ -978,7 +1011,10 @@ Object* eval_cell(Object* scope, Object* obj)
 
             if (get_type(body) == TYPE_CELL)
             {
-                debug("Function body is a list, evaluating in the same frame:");
+                if (DEBUG_EXTRA)
+                {
+                    printf("Function body is a list, evaluating in the same frame:\n");
+                }
                 obj = body;
                 scope = next_scope;
                 goto start;
@@ -987,7 +1023,7 @@ Object* eval_cell(Object* scope, Object* obj)
             ret = eval(next_scope, body);
         }
 
-        if (is_debug)
+        if (DEBUG_EXTRA)
         {
             printf("Return from: ");
             print(func_body(fn));
@@ -1007,7 +1043,7 @@ Object* eval_cell(Object* scope, Object* obj)
 
         if (get_type(obj) == TYPE_CELL)
         {
-            if (is_stack_trace)
+            if (DEBUG_EXTRA)
             {
                 printf("Doing tail call: ");
                 print(obj);
@@ -1018,7 +1054,7 @@ Object* eval_cell(Object* scope, Object* obj)
             goto start;
         }
 
-        if (is_stack_trace)
+        if (DEBUG_EXTRA)
         {
             printf("NOT doing tail call: ");
             print(obj);
@@ -1042,7 +1078,7 @@ Object* eval(Object* scope, Object* obj)
     PUSH2(scope, obj);
 #endif
 
-    if (is_stack_trace)
+    if (DEBUG_INFO)
     {
         printf("EVAL %d (%d) ", debug_step++, debug_depth);
         for (int i = 0; i < debug_depth; i++)
@@ -1073,7 +1109,7 @@ Object* eval(Object* scope, Object* obj)
             ret = Nil;
             error("Undefined symbol: %s", get_symbol(obj));
 
-            if (is_debug)
+            if (DEBUG_EXTRA)
             {
                 print_scope(scope);
             }
@@ -1087,11 +1123,11 @@ Object* eval(Object* scope, Object* obj)
         break;
     }
 
-    if (is_stack_trace)
+    if (DEBUG_INFO)
     {
         --debug_depth;
         printf("RET: ");
-        print(obj);
+        print_one(obj);
         printf(" -> ");
         print(ret);
     }
@@ -1424,7 +1460,7 @@ Object* builtin_if(Object* scope, Object* args)
     Object* cond = eval(scope, car(args));
     Object* res = cond != Nil ? car(cdr(args)) : car(cdr(cdr(args)));
 
-    if (is_debug)
+    if (DEBUG_EXTRA)
     {
         printf("Condition ");
         print_one(car(args));
@@ -1482,7 +1518,14 @@ Object* builtin_debug(Object* scope, Object* args)
 
     Object* ret = eval(scope, car(args));
 #ifndef NDEBUG
-    is_debug = ret != Nil;
+    if (get_type(ret) == TYPE_NUMBER)
+    {
+        debug_level = get_number(ret);
+    }
+    else
+    {
+        error("argument is not a number");
+    }
 #else
     (void)ret;
     error("debug is not usable in release mode");
@@ -1723,7 +1766,7 @@ void define_builtins()
 
 void parse()
 {
-    if (is_debug)
+    if (DEBUG_EXTRA)
     {
         debug_step = 0;
     }
@@ -1743,7 +1786,7 @@ void parse()
 
     if (obj != Undefined)
     {
-        if (is_debug)
+        if (DEBUG_EXTRA)
         {
             printf("======================================================================\n");
         }
@@ -1792,22 +1835,12 @@ int main(int argc, char** argv)
             verbose_gc = true;
             break;
 
-        case 's':
-#ifdef NDEBUG
-            printf("The -s flag is not available in optimized binaries\n");
-            return 1;
-#else
-            is_stack_trace = true;
-#endif
-            break;
-
         case 'd':
 #ifdef NDEBUG
             printf("The -d flag is not available in optimized binaries\n");
             return 1;
 #else
-            is_stack_trace = true;
-            is_debug = true;
+            debug_level++;
 #endif
             break;
 

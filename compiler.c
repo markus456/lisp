@@ -61,8 +61,16 @@ void compiled_writechar(Object* obj)
 bool compile_expr(uint8_t** mem, Object* self, Object* params, Object* body);
 bool compile_expr_recurse(uint8_t** mem, Object* self, Object* params, Object* obj, bool can_recurse);
 
-const char* symbol_name(void* addr)
+const char* symbol_name(Object* func)
 {
+    const char* name = get_symbol_by_pointed_value(func);
+
+    if (name)
+    {
+        return name;
+    }
+
+    void* addr = get_obj(func)->fn;
     static char buf[1024];
     Dl_info info;
 
@@ -185,7 +193,7 @@ bool valid_for_compile(Object* self, Object* params, Object* body)
     {
         debug("Self-recursive function");
     }
-    else if (get_type(func) == TYPE_FUNCTION && get_obj(func)->compiled == COMPILE_CODE)
+    else if (get_type(func) == TYPE_FUNCTION && get_obj(func)->ufn.compiled == COMPILE_CODE)
     {
         debug("Other compiled function");
     }
@@ -197,13 +205,13 @@ bool valid_for_compile(Object* self, Object* params, Object* body)
     }
     else if (!is_supported_builtin(get_obj(func)->fn))
     {
-        error("Builtin not supported, too complex: %s", symbol_name(get_obj(func)->fn));
+        error("Builtin not supported, too complex: %s", symbol_name(func));
         print(body);
         return false;
     }
 
     assert(get_type(car(body)) == TYPE_BUILTIN || func == self
-           || (get_type(car(body)) == TYPE_FUNCTION && get_obj(car(body))->compiled == COMPILE_CODE));
+           || (get_type(car(body)) == TYPE_FUNCTION && get_func(car(body))->ufn.compiled == COMPILE_CODE));
     debug("Builtin function or self-recursion, checking all arguments");
     debug_print(body);
 
@@ -369,7 +377,7 @@ Bite* bite_recursion(Bite** bites, Object* self, Object* params, Object* args)
     Bite* rec = make_bite(bites);
     rec->op = OP_RECURSE;
     rec->arg1 = bite_list(bites, self, params, args);
-    rec->arg2 = (Bite*)func_body(self);
+    rec->arg2 = (Bite*)func_jit_mem(self);
     return rec;
 }
 
@@ -378,7 +386,7 @@ Bite* bite_call(Bite** bites, Object* self, Object* params, Object* func, Object
     Bite* call = make_bite(bites);
     call->op = OP_CALL;
     call->arg1 = bite_list(bites, self, params, args);
-    call->arg2 = (Bite*)func_body(func);
+    call->arg2 = (Bite*)func_jit_mem(func);
     return call;
 }
 
@@ -1084,7 +1092,7 @@ bool compile_recursion(uint8_t** mem, Object* self, Object* params, Object* args
 
     // Patch the offset right away
     EMIT_JMP_OFF32_NO_PLACEHOLDER();
-    uint8_t* start = (uint8_t*)func_body(self);
+    uint8_t* start = func_jit_mem(self);
     ptrdiff_t backwards = start - *mem - 4; // The extra 4 is for the imm32 that we emit right now
     EMIT_IMM32(backwards);
 
@@ -1108,7 +1116,7 @@ bool compile_call(uint8_t** mem, Object* self, Object* params, Object* func, Obj
     EMIT_MOV64_REG_REG(REG_ARGS, REG_FRAME);
     EMIT_SUB64_IMM8(REG_ARGS, OBJ_SIZE * len);
 
-    intptr_t fn = (intptr_t)func_body(func);
+    intptr_t fn = (intptr_t)func_jit_mem(func);
     EMIT_MOV64_REG_IMM64(REG_RET, fn);
     EMIT_CALL_REG(REG_RET);
 
@@ -2421,9 +2429,8 @@ bool compile_to_bytecode(Object* scope, Object* name, Object* self, Object* para
 
     void* memory = mmap(NULL, COMPILE_MEM_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     uint8_t* ptr = (uint8_t*)memory;
-    Object* old_body = func_body(self);
     // The body is used to store the pointer that self-recursive functions need
-    get_obj(self)->func_body = (Object*) memory;
+    get_obj(self)->ufn.jit_mem = (Object*) memory;
     bool ok = generate_bytecode(&ptr, scope, name, self, params, body);
 
     if (ok)
@@ -2445,7 +2452,7 @@ bool compile_to_bytecode(Object* scope, Object* name, Object* self, Object* para
             fflush(stdout);
         }
 
-        get_obj(self)->compiled = COMPILE_CODE;
+        get_obj(self)->ufn.compiled = COMPILE_CODE;
 
         CompiledFunction* comp = malloc(sizeof(CompiledFunction));
         comp->memory = memory;
@@ -2455,7 +2462,7 @@ bool compile_to_bytecode(Object* scope, Object* name, Object* self, Object* para
     }
     else
     {
-        get_obj(self)->func_body = old_body;
+        get_obj(self)->ufn.jit_mem = NULL;
         munmap(memory, COMPILE_MEM_SIZE);
     }
 
@@ -2508,7 +2515,7 @@ bool compile_function(Object* scope, Object* args, CompileFunc compile_func, uin
             }
             else
             {
-                get_obj(func)->compiled = compile_level;
+                get_obj(func)->ufn.compiled = compile_level;
             }
         }
     }
@@ -2536,7 +2543,7 @@ typedef Object* (*JitFunc)(Object**);
 Object* jit_eval(Object* fn, Object* args)
 {
     assert(get_type(fn) == TYPE_FUNCTION);
-    assert(get_obj(fn)->compiled == COMPILE_CODE);
+    assert(get_obj(fn)->ufn.compiled == COMPILE_CODE);
     int len = length(args);
     int required = length(func_params(fn));
 
@@ -2558,6 +2565,6 @@ Object* jit_eval(Object* fn, Object* args)
         arg_stack[--len] = cdr(car(o));
     }
 
-    JitFunc func = (JitFunc)func_body(fn);
+    JitFunc func = (JitFunc)func_jit_mem(fn);
     return func(arg_stack);
 }
