@@ -162,6 +162,7 @@ Object* get_builtin(Object* obj);
 
 const char* get_symbol(Object* obj);
 const char* get_symbol_by_pointed_value(Object* val);
+const char* get_type_name(enum Type type);
 
 int64_t get_number(Object* obj);
 Object* func_params(Object* obj);
@@ -175,6 +176,7 @@ void bind_value(Object* scope, Object* symbol, Object* value);
 Object* symbol(const char* name);
 Object* car(Object* obj);
 Object* cdr(Object* obj);
+Object* cons(Object* car, Object* cdr);
 Object* eval(Object* scope, Object* obj);
 int length(Object* list);
 

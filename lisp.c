@@ -54,6 +54,30 @@ Object* make_ptr(Object* obj, enum Type type)
     return (Object*)(p | type);
 }
 
+const char* get_type_name(enum Type type)
+{
+    switch (type)
+    {
+    case TYPE_NUMBER:
+        return "TYPE_NUMBER";
+    case TYPE_SYMBOL:
+        return "TYPE_SYMBOL";
+    case TYPE_BUILTIN:
+        return "TYPE_BUILTIN";
+    case TYPE_CELL:
+        return "TYPE_CELL";
+    case TYPE_FUNCTION:
+        return "TYPE_FUNCTION";
+    case TYPE_MACRO:
+        return "TYPE_MACRO";
+    case TYPE_CONST:
+        return "TYPE_CONST";
+    }
+
+    assert(!true);
+    return "TYPE_UNKNOWN";
+}
+
 // The special return value from some of the functions that indicates that the
 // return value should be evaluated in the same stack frame.
 Object TailCall_obj = {0};
@@ -590,7 +614,7 @@ const char* get_symbol_by_pointed_value(Object* val)
         }
     }
 
-    return NULL;
+    return "{unbound}";
 }
 
 

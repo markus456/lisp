@@ -149,4 +149,4 @@
 ;; builtins used by them from being overridden by the calling code.
 (compile not and or xor min max mul_impl mul largest-doubling_impl largest-doubling
          div_impl div pow_impl pow mod_impl mod length append mapcar nth
-         fill fill_impl generate generate_impl loop write-list write-number)
+         fill_impl fill generate_impl generate loop write-list write-number)
