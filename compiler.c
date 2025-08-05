@@ -1935,7 +1935,9 @@ bool bite_compile_writechar_arg(uint8_t** mem, Bite* bite)
 
     EMIT_PUSH(REG_ARGS);
 
-    if (reglist_in_use(REG_RET))
+    assert(get_x86_64_register(0) == REG_RET);
+
+    if (reglist_in_use(0))
     {
         EMIT_PUSH(REG_RET);
     }
@@ -1944,7 +1946,7 @@ bool bite_compile_writechar_arg(uint8_t** mem, Bite* bite)
     EMIT_MOV64_REG_IMM64(REG_RET, (intptr_t)compiled_writechar);
     EMIT_CALL_REG(REG_RET);
 
-    if (reglist_in_use(REG_RET))
+    if (reglist_in_use(0))
     {
         EMIT_POP(REG_RET);
     }
