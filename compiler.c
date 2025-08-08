@@ -28,6 +28,9 @@ CompiledFunction* compiled_functions = NULL;
 
 typedef bool (*CompileFunc)(Object* scope, Object* name, Object* self, Object* params, Object* body);
 
+//The pointer to the start of the JIT stack
+Object** s_jit_stack = NULL;
+
 // The declarations for builtins that we know of and can compile
 Object* builtin_if(Object* scope, Object* args);
 Object* builtin_less(Object* scope, Object* args);
@@ -949,7 +952,7 @@ void print_bitecode(Bite* bite)
 // Bite compilation to machine code
 //
 
-#define TEMP_REGISTERS 4
+#define TEMP_REGISTERS 3
 #define LAST_TEMP_REGISTER TEMP_REGISTERS - 1
 
 int get_x86_64_register(int reg)
@@ -962,8 +965,6 @@ int get_x86_64_register(int reg)
         return REG_TMP1;
     case 2:
         return REG_TMP2;
-    case 3:
-        return REG_TMP3;
     default:
         assert(false);
         break;
@@ -991,11 +992,6 @@ intptr_t get_ptr_offset(Bite* bite)
 {
     assert(bite->op == OP_PTR);
     return (intptr_t)bite->arg2;
-}
-
-int get_temp_offset(int tmp)
-{
-    return (tmp + 1) * -8;
 }
 
 // These are used to patch the jump point to the start of the function after the
@@ -1262,8 +1258,10 @@ bool bite_compile_binary_op(uint8_t** mem, Bite* bite, int op)
         }
 
         int temp = temps++;
-        assert(get_temp_offset(temp) < 128);
-        EMIT_MOV64_OFF8_REG(REG_FRAME, get_register(rhs), get_temp_offset(temp));
+
+        EMIT_MOV64_PTR_REG(REG_STACK, get_register(rhs));
+        EMIT_ADD64_IMM8(REG_STACK, OBJ_SIZE);
+
         debug("%s spilled to memory at temp@%d from register %d", rhs->id, temp, rhs->reg);
 
         if (!bite_compile(mem, lhs))
@@ -1274,16 +1272,16 @@ bool bite_compile_binary_op(uint8_t** mem, Bite* bite, int op)
         switch (op)
         {
         case OP_ADD:
-            EMIT_ADD64_REG_OFF8(get_register(lhs), REG_FRAME, get_temp_offset(temp));
+            EMIT_ADD64_REG_OFF8(get_register(lhs), REG_STACK, -OBJ_SIZE);
             break;
 
         case OP_SUB:
-            EMIT_SUB64_REG_OFF8(get_register(lhs), REG_FRAME, get_temp_offset(temp));
+            EMIT_SUB64_REG_OFF8(get_register(lhs), REG_STACK, -OBJ_SIZE);
             break;
 
         case OP_LESS:
         case OP_EQ:
-            EMIT_CMP64_REG_OFF8(get_register(lhs), REG_FRAME, get_temp_offset(temp));
+            EMIT_CMP64_REG_OFF8(get_register(lhs), REG_STACK, -OBJ_SIZE);
             break;
 
         default:
@@ -1291,6 +1289,7 @@ bool bite_compile_binary_op(uint8_t** mem, Bite* bite, int op)
             break;
         }
 
+        EMIT_SUB64_IMM8(REG_STACK, OBJ_SIZE);
         bite->reg = lhs->reg;
         debug("%s takes register %d from %s", bite->id, bite->reg, lhs->id);
     }
@@ -1461,10 +1460,13 @@ bool bite_compile_call(uint8_t** mem, Bite* bite)
         RESERVE_STACK(OBJ_SIZE * len);
     }
 
+    // The argument list is reversed, the first value in the linked list is the last argument to the function.
+    // TODO: This only supports at most 8 arguments and registers before the negative 128 byte offset underflows.
+    // TODO: Add EMIT_MOV64_OFF32_REG and friends.
     for (Bite* b = bite->arg1; b; b = b->arg2)
     {
         bite_compile(mem, b->arg1);
-        EMIT_MOV64_OFF8_REG(REG_FRAME, get_register(b->arg1), -OBJ_SIZE * pos);
+        EMIT_MOV64_OFF8_REG(REG_STACK, get_register(b->arg1), -OBJ_SIZE * pos);
         pos++;
     }
 
@@ -1473,20 +1475,22 @@ bool bite_compile_call(uint8_t** mem, Bite* bite)
     bite->reg = bite->arg1 ? bite->arg1->arg1->reg : reglist->reg[0];
     debug("%s uses register %d from %s", bite->id, bite->reg,
           bite->arg1 ? bite->arg1->arg1->id : "free register list");
+    int temp_regs = 0;
 
     for (int r = 0; r < TEMP_REGISTERS; r++)
     {
         if (reglist_in_use(r) && !is_call_argument_register(bite, r))
         {
-            EMIT_PUSH(get_x86_64_register(r));
+            PUSH_TO_STACK(get_x86_64_register(r));
+            ++temp_regs;
         }
     }
 
     if (len > 0)
     {
         EMIT_PUSH(REG_ARGS);
-        EMIT_MOV64_REG_REG(REG_ARGS, REG_FRAME);
-        EMIT_SUB64_IMM8(REG_ARGS, OBJ_SIZE * len);
+        EMIT_MOV64_REG_REG(REG_ARGS, REG_STACK);
+        EMIT_SUB64_IMM8(REG_ARGS, OBJ_SIZE * (len + temp_regs));
     }
 
     intptr_t fn = (intptr_t)bite->arg2;
@@ -1508,7 +1512,7 @@ bool bite_compile_call(uint8_t** mem, Bite* bite)
     {
         if (reglist_in_use(r) && !is_call_argument_register(bite, r))
         {
-            EMIT_POP(get_x86_64_register(r));
+            POP_FROM_STACK(get_x86_64_register(r));
         }
     }
 
@@ -1559,7 +1563,7 @@ bool bite_compile_recurse(uint8_t** mem, Bite* bite)
     // Whenever recursion is about to happen, there should be no registers in use.
     assert(reglist->size == TEMP_REGISTERS);
 
-    if (len - redundant_moves > TEMP_REGISTERS)
+    if (len - redundant_moves >= TEMP_REGISTERS)
     {
         RESERVE_STACK(OBJ_SIZE * (len - TEMP_REGISTERS));
     }
@@ -1586,11 +1590,14 @@ bool bite_compile_recurse(uint8_t** mem, Bite* bite)
 
             if (reglist->size > 1)
             {
+                debug("%s stored in register %d for recursion for arg offset %d", b->arg1->id, b->arg1->reg, i);
                 reglist_push(&regs[n++], b->arg1->reg);
             }
             else
             {
-                EMIT_MOV64_OFF8_REG(REG_FRAME, get_register(b->arg1), -OBJ_SIZE * pos);
+                assert(len - redundant_moves >= TEMP_REGISTERS);
+                debug("%s stored on stack for recursion for arg offset %d", b->arg1->id, i);
+                EMIT_MOV64_OFF8_REG(REG_STACK, get_register(b->arg1), -OBJ_SIZE * pos);
                 pos++;
             }
         }
@@ -1617,7 +1624,7 @@ bool bite_compile_recurse(uint8_t** mem, Bite* bite)
             }
             else
             {
-                EMIT_MOV64_REG_OFF8(get_register(b->arg1), REG_FRAME, -OBJ_SIZE * pos);
+                EMIT_MOV64_REG_OFF8(get_register(b->arg1), REG_STACK, -OBJ_SIZE * pos);
                 EMIT_MOV64_OFF8_REG(REG_ARGS, get_register(b->arg1), OBJ_SIZE * (len - i - 1));
                 pos++;
             }
@@ -1676,25 +1683,28 @@ bool bite_compile_writechar_arg(uint8_t** mem, Bite* bite)
         return false;
     }
 
-    EMIT_PUSH(REG_ARGS);
-
     assert(get_x86_64_register(0) == REG_RET);
 
     if (reglist_in_use(0))
     {
-        EMIT_PUSH(REG_RET);
+        PUSH_TO_STACK(REG_RET);
     }
+
+    EMIT_PUSH(REG_ARGS);
+    EMIT_PUSH(REG_STACK);
 
     EMIT_MOV64_REG_REG(REG_ARGS, get_register(bite->arg1));
     EMIT_MOV64_REG_IMM64(REG_RET, (intptr_t)compiled_writechar);
     EMIT_CALL_REG(REG_RET);
 
+    EMIT_POP(REG_STACK);
+    EMIT_POP(REG_ARGS);
+
     if (reglist_in_use(0))
     {
-        EMIT_POP(REG_RET);
+        POP_FROM_STACK(REG_RET);
     }
 
-    EMIT_POP(REG_ARGS);
     return true;
 }
 
@@ -1711,6 +1721,15 @@ bool bite_compile_writechar(uint8_t** mem, Bite* bite)
 
 bool bite_compile_cons(uint8_t** mem, Bite* bite)
 {
+    // Push all of the in-use registers onto the stack
+    for (int r = 0; r < TEMP_REGISTERS; r++)
+    {
+        if (reglist_in_use(r))
+        {
+            PUSH_TO_STACK(get_x86_64_register(r));
+        }
+    }
+
     // Save the two arguments onto the stack
     RESERVE_STACK(OBJ_SIZE * 2);
 
@@ -1722,49 +1741,50 @@ bool bite_compile_cons(uint8_t** mem, Bite* bite)
     bite->reg = bite->arg1->reg;
     debug("%s uses register %d from %s", bite->id, bite->reg, bite->arg1->id);
 
-    EMIT_MOV64_OFF8_REG(REG_FRAME, get_register(bite->arg1), -OBJ_SIZE * 1);
+    EMIT_MOV64_OFF8_REG(REG_STACK, get_register(bite->arg1), -OBJ_SIZE * 1);
 
     if (!bite_compile(mem, bite->arg2))
     {
         return false;
     }
 
-    EMIT_MOV64_OFF8_REG(REG_FRAME, get_register(bite->arg2), -OBJ_SIZE * 2);
+    EMIT_MOV64_OFF8_REG(REG_STACK, get_register(bite->arg2), -OBJ_SIZE * 2);
 
     assert(get_x86_64_register(0) == REG_RET);
-    assert(get_x86_64_register(1) == REG_TMP1);
     assert(REG_ARGS == REG_RDI); // 1st argument
-    assert(REG_TMP1 == REG_RSI); // 2nd argument
+    assert(REG_STACK == REG_RSI); // 2nd argument
+
+    // Store a NULL value at the end of the stack so that the garbage collection
+    // knows where the stack ends.
+    EMIT_MOV64_REG_IMM64(get_register(bite->arg2), (intptr_t)JitEnd);
+    EMIT_MOV64_PTR_REG(REG_STACK, get_register(bite->arg2));
 
     EMIT_PUSH(REG_ARGS);
+    EMIT_PUSH(REG_STACK);
 
-    for (int r = 0; r < TEMP_REGISTERS; r++)
-    {
-        if (reglist_in_use(r))
-        {
-            EMIT_PUSH(get_x86_64_register(r));
-        }
-    }
-
-    EMIT_MOV64_REG_OFF8(REG_RDI, REG_FRAME, -OBJ_SIZE * 1);
-    EMIT_MOV64_REG_OFF8(REG_RSI, REG_FRAME, -OBJ_SIZE * 2);
+    // REG_ARGS is REG_RDI (1st argument) and REG_STACK is REG_RSI (2nd
+    // argument). Since we store the arguments on the stack, the stack register
+    // must be the last one that's moved.
+    EMIT_MOV64_REG_OFF8(REG_RDI, REG_STACK, -OBJ_SIZE * 1);
+    EMIT_MOV64_REG_OFF8(REG_RSI, REG_STACK, -OBJ_SIZE * 2);
     EMIT_MOV64_REG_IMM64(REG_RET, (intptr_t)compiled_cons);
     EMIT_CALL_REG(REG_RET);
-    EMIT_MOV64_OFF8_REG(REG_FRAME, REG_RET, -OBJ_SIZE * 1);
+
+    EMIT_POP(REG_STACK);
+    EMIT_POP(REG_ARGS);
+
+    // Then move back the result of the function call
+    EMIT_MOV64_REG_REG(get_register(bite->arg1), REG_RET);
+    FREE_STACK(OBJ_SIZE * 2);
 
     for (int r = TEMP_REGISTERS - 1; r >= 0; r--)
     {
         if (reglist_in_use(r))
         {
-            EMIT_POP(get_x86_64_register(r));
+            assert(r != bite->reg);
+            POP_FROM_STACK(get_x86_64_register(r));
         }
     }
-
-    EMIT_POP(REG_ARGS);
-
-    // Then move back the result of the function call
-    EMIT_MOV64_REG_OFF8(get_register(bite->arg1), REG_FRAME, -OBJ_SIZE * 1);
-    FREE_STACK(OBJ_SIZE * 2);
 
     return true;
 }
@@ -1961,10 +1981,8 @@ const char* reg_name(int reg)
     case 0:
         return "rax";
     case 1:
-        return "rsi";
-    case 2:
         return "rdx";
-    case 3:
+    case 2:
         return "rcx";
     }
 
@@ -2141,15 +2159,8 @@ bool generate_bytecode(uint8_t** mem, Object* scope, Object* name, Object* self,
 {
     recursion_marker_count = 0;
 
-    uint8_t* orig_mem = *mem;
-
-    // Always emit the instructions for the function prologue and a 32-bit stack size.
-    // These get patched in later as the temporary count is only known after compilation
-    //
-    // TODO: This should really be a separate pass that counts how many
-    // temporaries need to be stored on the stack.
+    // Always emit the instructions for the function prologue.
     EMIT_PROLOGUE();
-    EMIT_SUB64_IMM32(REG_STACK, 0);
     uint8_t* prologue_end = *mem;
 
     Bite bitecode[1024];
@@ -2211,22 +2222,7 @@ bool generate_bytecode(uint8_t** mem, Object* scope, Object* name, Object* self,
             PATCH_JMP32(ptr, prologue_end - ptr);
         }
 
-        if (temps > 0)
-        {
-            uint8_t* mem_tmp = *mem;
-            *mem = prologue_end - 4;
-            EMIT_IMM32(temps * OBJ_SIZE);
-            *mem = mem_tmp;
-
-            FREE_STACK(temps * OBJ_SIZE);
-        }
-        else
-        {
-            uint8_t* mem_end = *mem;
-            size_t bytes = mem_end - prologue_end;
-            memmove(orig_mem, prologue_end, bytes);
-            *mem = orig_mem + bytes;
-        }
+        EMIT_EPILOGUE();
 
         if (debug_on())
         {
@@ -2359,8 +2355,8 @@ void jit_compile(Object* scope, Object* args)
     }
 }
 
-// The JIT functions receive their arguments in RDI
-typedef Object* (*JitFunc)(Object**);
+// The JIT functions receive their arguments in RDI and a stack in RSI
+typedef Object* (*JitFunc)(Object**, Object**);
 
 Object* jit_eval(Object* fn, Object* args)
 {
@@ -2375,7 +2371,10 @@ Object* jit_eval(Object* fn, Object* args)
         return Nil;
     }
 
-    Object* arg_stack[len + 1];
+    Object* func_args[len + 1];
+    Object* func_stack[JIT_STACK_SIZE];
+    func_stack[0] = JitEnd;
+    s_jit_stack = func_stack;
 
     // The function arguments are bound in the reverse order they are declared to the
     // scope. Each value is copied into the stack buffer that is then passed
@@ -2384,9 +2383,16 @@ Object* jit_eval(Object* fn, Object* args)
     for (Object* o = args; o != Nil; o = cdr(o))
     {
         debug("Arg[%d] = %p", len, cdr(car(o)));
-        arg_stack[--len] = cdr(car(o));
+        func_args[--len] = cdr(car(o));
     }
 
     JitFunc func = (JitFunc)func_jit_mem(fn);
-    return func(arg_stack);
+    Object* ret = func(func_args, func_stack);
+    s_jit_stack = NULL;
+    return ret;
+}
+
+Object** jit_stack()
+{
+    return s_jit_stack;
 }

@@ -16,4 +16,7 @@ Object* jit_eval(Object* fn, Object* args);
 void jit_resolve_symbols(Object* scope, Object* args);
 void jit_compile(Object* scope, Object* args);
 
+// Returns a NULL pointer if there's no JIT call in progress
+Object** jit_stack();
+
 void jit_free();

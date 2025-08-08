@@ -26,12 +26,11 @@
 // Constants used in the code, makes it easier to remember what each register is used for
 
 #define REG_FRAME REG_RBP
-#define REG_STACK REG_RSP
+#define REG_STACK REG_RSI
 #define REG_ARGS  REG_RDI
 #define REG_RET   REG_RAX
-#define REG_TMP1  REG_RSI
-#define REG_TMP2  REG_RDX
-#define REG_TMP3  REG_RCX
+#define REG_TMP1  REG_RDX
+#define REG_TMP2  REG_RCX
 
 #define OBJ_SIZE (int)sizeof(Object*)
 
@@ -178,7 +177,13 @@ void PATCH_JMP32(uint8_t* ptr, uint32_t off);
 
 #define EMIT_PROLOGUE() EMIT_PUSH(REG_RBP); EMIT_MOV64_REG_REG(REG_RBP, REG_RSP)
 
-#define EMIT_EPILOGUE() EMIT_POP(REG_RBP)
+#define EMIT_EPILOGUE() EMIT_MOV64_REG_REG(REG_RSP, REG_RBP); EMIT_POP(REG_RBP)
 
-#define RESERVE_STACK(size) EMIT_PROLOGUE(); if (size < 128) {EMIT_SUB64_IMM8(REG_STACK, size);} else {EMIT_SUB64_IMM32(REG_STACK, size);}
-#define FREE_STACK(size) if (size < 128) {EMIT_ADD64_IMM8(REG_STACK, size);} else {EMIT_ADD64_IMM32(REG_STACK, size);} EMIT_EPILOGUE();
+#define RESERVE_STACK(size) if (size < 128) {EMIT_ADD64_IMM8(REG_STACK, size);} else {EMIT_ADD64_IMM32(REG_STACK, size);}
+#define FREE_STACK(size) if (size < 128) {EMIT_SUB64_IMM8(REG_STACK, size);} else {EMIT_SUB64_IMM32(REG_STACK, size);}
+
+// PUSH: a (uses a custom stack)
+#define PUSH_TO_STACK(a) EMIT_MOV64_PTR_REG(REG_STACK, a); EMIT_ADD64_IMM8(REG_STACK, OBJ_SIZE);
+
+// POP: a (uses a custom stack)
+#define POP_FROM_STACK(a) EMIT_SUB64_IMM8(REG_STACK, OBJ_SIZE);EMIT_MOV64_REG_PTR(a, REG_STACK);

@@ -114,6 +114,7 @@ struct Object
 #define Nil       ((Object*)0x0f)
 #define True      ((Object*)0x1f)
 #define Undefined ((Object*)0x2f) // Used as the error object in some functions
+#define JitEnd    ((Object*)0x3f) // Marks the end of the JIT stack
 
 // Allocation sizes and such
 #define ALLOC_ALIGN _Alignof(Object)
