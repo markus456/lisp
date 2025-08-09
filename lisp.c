@@ -4,7 +4,9 @@
 
 #define MAX_SYMBOL_LEN 1024
 
+#ifndef ALWAYS_GC
 #define ALWAYS_GC 0
+#endif
 
 Frame* stack_top = NULL;
 
@@ -46,12 +48,6 @@ int get_stored_type(Object* obj)
 const char* get_symbol(Object* obj)
 {
     return get_obj(obj)->name;
-}
-
-Object* make_ptr(Object* obj, enum Type type)
-{
-    intptr_t p = (intptr_t)obj;
-    return (Object*)(p | type);
 }
 
 const char* get_type_name(enum Type type)
@@ -130,6 +126,8 @@ int debug_level = 0;
 void debug(const char*, ...)
 {
 }
+
+#define gc_debug
 #else
 void debug(const char* fmt, ...)
 {
@@ -142,6 +140,8 @@ void debug(const char* fmt, ...)
         printf("\n");
     }
 }
+
+#define gc_debug(...)if(verbose_gc){debug(__VA_ARGS__);}
 #endif
 
 bool debug_on()
@@ -158,7 +158,11 @@ size_t allocation_size(size_t size)
     // minimum allocation size is 16 bytes, assuming 8 bytes for the pointer and
     // the 8 bytes that the alignment of the union requires.
     const size_t min_size = BASE_SIZE + sizeof(Object*);
-    return size > min_size ? size : min_size;
+    size_t ret = size > min_size ? size : min_size;
+    // As all objects must have an alignment of 8 due to the low bits being used
+    // for the type flags, we need all object sizes to also be a multiple of 8.
+    assert(ret % 8 == 0);
+    return ret;
 }
 
 size_t type_size(enum Type type)
@@ -195,11 +199,20 @@ size_t object_size(Object* obj)
     return type_size(type);
 }
 
+Object* make_ptr(Object* obj, enum Type type)
+{
+    intptr_t p = (intptr_t)obj;
+    Object* ptr = (Object*)(p | type);
+    gc_debug("Create [%d] %p %s", mem_end == mem_root + memory_size ? 2 : 1, ptr, get_type_name(type));
+    return ptr;
+}
+
 // Garbage collection
 
 Object* make_living(Object* obj)
 {
     int type = get_type(obj);
+    gc_debug("living %p %s", obj, get_type_name(type));
 
     if (type == TYPE_CONST || type == TYPE_NUMBER)
     {
@@ -222,9 +235,15 @@ Object* make_living(Object* obj)
         ptr->moved = (Object*)mem_ptr;
         mem_ptr += size;
     }
+    else
+    {
+        gc_debug("Already moved %p %s", ptr, get_type_name(type));
+    }
 
     assert(ptr->moved);
-    return make_ptr(ptr->moved, type);
+    Object* ret = make_ptr(ptr->moved, type);
+    gc_debug("Re-pointing %p to %p", obj, ret);
+    return ret;
 }
 
 void fix_references(Object* obj)
@@ -256,6 +275,7 @@ void fix_references(Object* obj)
     case TYPE_NUMBER:
     case TYPE_CONST:
     default:
+        printf("Unknown! %d %p\n", type, obj);
         assert(!true);
         break;
     }
@@ -263,6 +283,7 @@ void fix_references(Object* obj)
 
 void collect_garbage()
 {
+    gc_debug("Starting GC");
     size_t space_size = memory_size / 2;
     size_t memory_used = mem_ptr - mem_root;
     uint8_t* old_root = NULL;
@@ -291,9 +312,12 @@ void collect_garbage()
     uint8_t* scan_start = mem_ptr;
     uint8_t* scan_ptr = scan_start;
 
+    gc_debug("Make Env living");
     Env = make_living(Env);
+    gc_debug("Make AllSymbols living");
     AllSymbols = make_living(AllSymbols);
 
+    gc_debug("Make Frame living");
     for (Frame* f = stack_top; f; f = f->next)
     {
         for (int i = 0; i < f->size; i++)
@@ -305,6 +329,7 @@ void collect_garbage()
     while (scan_ptr < mem_ptr)
     {
         Object* o = (Object*)scan_ptr;
+        gc_debug("Fixing %p", o);
         fix_references(o);
         scan_ptr += object_size(o);
     }
@@ -339,6 +364,8 @@ void collect_garbage()
     {
         grow_memory = true;
     }
+
+    gc_debug("GC done");
 }
 
 // Object creation
@@ -356,6 +383,7 @@ Object* allocate(size_t size)
     }
 
     Object* rv = (Object*)mem_ptr;
+    gc_debug("Allocate [%d] %p <%lu>", mem_end == mem_root + memory_size ? 2 : 1, rv, size);
     mem_ptr += size;
 
     assert(get_obj(rv) == rv);
