@@ -1445,29 +1445,40 @@ bool is_call_argument_register(Bite* bite, int reg)
     return false;
 }
 
+bool bite_compile_call_arguments(uint8_t** mem, Bite* bite)
+{
+    if (bite)
+    {
+        if (bite->arg2 && !bite_compile_call_arguments(mem, bite->arg2))
+        {
+            return false;
+        }
+
+        if (!bite_compile(mem, bite->arg1))
+        {
+            return false;
+        }
+
+        PUSH_TO_STACK(get_register(bite->arg1));
+    }
+
+    return true;
+}
+
 bool bite_compile_call(uint8_t** mem, Bite* bite)
 {
     int len = 0;
-    int pos = 1;
 
     for (Bite* b = bite->arg1; b; b = b->arg2)
     {
         len++;
     }
 
-    if (len > 0)
-    {
-        RESERVE_STACK(OBJ_SIZE * len);
-    }
-
     // The argument list is reversed, the first value in the linked list is the last argument to the function.
-    // TODO: This only supports at most 8 arguments and registers before the negative 128 byte offset underflows.
-    // TODO: Add EMIT_MOV64_OFF32_REG and friends.
-    for (Bite* b = bite->arg1; b; b = b->arg2)
+    // These need to be compiled and pushed onto the stack in the correct argument order.
+    if (!bite_compile_call_arguments(mem, bite->arg1))
     {
-        bite_compile(mem, b->arg1);
-        EMIT_MOV64_OFF8_REG(REG_STACK, get_register(b->arg1), -OBJ_SIZE * pos);
-        pos++;
+        return false;
     }
 
     assert(get_x86_64_register(0) == REG_RET);
@@ -1551,7 +1562,6 @@ int count_redundant_moves(Bite* bite, int len)
 bool bite_compile_recurse(uint8_t** mem, Bite* bite)
 {
     int len = 0;
-    int pos = 1;
 
     for (Bite* b = bite->arg1; b; b = b->arg2)
     {
@@ -1562,11 +1572,6 @@ bool bite_compile_recurse(uint8_t** mem, Bite* bite)
 
     // Whenever recursion is about to happen, there should be no registers in use.
     assert(reglist->size == TEMP_REGISTERS);
-
-    if (len - redundant_moves >= TEMP_REGISTERS)
-    {
-        RESERVE_STACK(OBJ_SIZE * (len - TEMP_REGISTERS));
-    }
 
     RegList* prev = reglist;
     RegList regs[4];
@@ -1597,8 +1602,7 @@ bool bite_compile_recurse(uint8_t** mem, Bite* bite)
             {
                 assert(len - redundant_moves >= TEMP_REGISTERS);
                 debug("%s stored on stack for recursion for arg offset %d", b->arg1->id, i);
-                EMIT_MOV64_OFF8_REG(REG_STACK, get_register(b->arg1), -OBJ_SIZE * pos);
-                pos++;
+                PUSH_TO_STACK(get_register(b->arg1));
             }
         }
 
@@ -1612,7 +1616,6 @@ bool bite_compile_recurse(uint8_t** mem, Bite* bite)
     }
 
     i = 0;
-    pos = 1;
 
     for (Bite* b = bite->arg1; b; b = b->arg2)
     {
@@ -1624,9 +1627,8 @@ bool bite_compile_recurse(uint8_t** mem, Bite* bite)
             }
             else
             {
-                EMIT_MOV64_REG_OFF8(get_register(b->arg1), REG_STACK, -OBJ_SIZE * pos);
+                POP_FROM_STACK(get_register(b->arg1));
                 EMIT_MOV64_OFF8_REG(REG_ARGS, get_register(b->arg1), OBJ_SIZE * (len - i - 1));
-                pos++;
             }
         }
 
@@ -1731,7 +1733,6 @@ bool bite_compile_cons(uint8_t** mem, Bite* bite)
     }
 
     // Save the two arguments onto the stack
-    RESERVE_STACK(OBJ_SIZE * 2);
 
     if (!bite_compile(mem, bite->arg1))
     {
@@ -1741,14 +1742,14 @@ bool bite_compile_cons(uint8_t** mem, Bite* bite)
     bite->reg = bite->arg1->reg;
     debug("%s uses register %d from %s", bite->id, bite->reg, bite->arg1->id);
 
-    EMIT_MOV64_OFF8_REG(REG_STACK, get_register(bite->arg1), -OBJ_SIZE * 1);
+    PUSH_TO_STACK(get_register(bite->arg1));
 
     if (!bite_compile(mem, bite->arg2))
     {
         return false;
     }
 
-    EMIT_MOV64_OFF8_REG(REG_STACK, get_register(bite->arg2), -OBJ_SIZE * 2);
+    PUSH_TO_STACK(get_register(bite->arg2));
 
     assert(get_x86_64_register(0) == REG_RET);
     assert(REG_ARGS == REG_RDI); // 1st argument

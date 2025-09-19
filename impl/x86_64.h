@@ -179,7 +179,11 @@ void PATCH_JMP32(uint8_t* ptr, uint32_t off);
 
 #define EMIT_EPILOGUE() EMIT_MOV64_REG_REG(REG_RSP, REG_RBP); EMIT_POP(REG_RBP)
 
+// NOTE: Don't use this unless you initialize the memory right after
+// it. Otherwise the garbage collection will end up thinking that the memory is
+// valid and ends up dereferencing pointers.
 #define RESERVE_STACK(size) if (size < 128) {EMIT_ADD64_IMM8(REG_STACK, size);} else {EMIT_ADD64_IMM32(REG_STACK, size);}
+
 #define FREE_STACK(size) if (size < 128) {EMIT_SUB64_IMM8(REG_STACK, size);} else {EMIT_SUB64_IMM32(REG_STACK, size);}
 
 // PUSH: a (uses a custom stack)
