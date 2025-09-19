@@ -127,7 +127,9 @@ void debug(const char*, ...)
 {
 }
 
-#define gc_debug
+void gc_debug(const char*, ...)
+{
+}
 #else
 void debug(const char* fmt, ...)
 {
@@ -138,6 +140,7 @@ void debug(const char* fmt, ...)
         vprintf(fmt, args);
         va_end(args);
         printf("\n");
+        fflush(stdout);
     }
 }
 
@@ -203,7 +206,6 @@ Object* make_ptr(Object* obj, enum Type type)
 {
     intptr_t p = (intptr_t)obj;
     Object* ptr = (Object*)(p | type);
-    gc_debug("Create [%d] %p %s", mem_end == mem_root + memory_size ? 2 : 1, ptr, get_type_name(type));
     return ptr;
 }
 
@@ -212,7 +214,7 @@ Object* make_ptr(Object* obj, enum Type type)
 Object* make_living(Object* obj)
 {
     int type = get_type(obj);
-    gc_debug("living %p %s", obj, get_type_name(type));
+    gc_debug("living %p %s %s", obj, get_type_name(type), type == TYPE_SYMBOL ? get_symbol(obj) : "");
 
     if (type == TYPE_CONST || type == TYPE_NUMBER)
     {
@@ -234,10 +236,11 @@ Object* make_living(Object* obj)
         assert(((intptr_t)((Object*)mem_ptr)->moved & TYPE_MASK) == type);
         ptr->moved = (Object*)mem_ptr;
         mem_ptr += size;
+        gc_debug("Moving %p to %p (%p) %s %s", obj, make_ptr(ptr->moved, type), ptr->moved, get_type_name(type), type == TYPE_SYMBOL ? get_symbol(obj) : "");
     }
     else
     {
-        gc_debug("Already moved %p %s", ptr, get_type_name(type));
+        gc_debug("Already moved %p to %p (%p) %s %s", obj, make_ptr(ptr->moved, type), ptr->moved, get_type_name(type), type == TYPE_SYMBOL ? get_symbol(obj) : "");
     }
 
     assert(ptr->moved);
@@ -283,7 +286,7 @@ void fix_references(Object* obj)
 
 void collect_garbage()
 {
-    gc_debug("Starting GC");
+    gc_debug(">>>> Starting GC");
     size_t space_size = memory_size / 2;
     size_t memory_used = mem_ptr - mem_root;
     uint8_t* old_root = NULL;
@@ -312,12 +315,12 @@ void collect_garbage()
     uint8_t* scan_start = mem_ptr;
     uint8_t* scan_ptr = scan_start;
 
-    gc_debug("Make Env living");
+    gc_debug("1. Make Env living");
     Env = make_living(Env);
-    gc_debug("Make AllSymbols living");
+    gc_debug("2. Make AllSymbols living");
     AllSymbols = make_living(AllSymbols);
 
-    gc_debug("Make Frame living");
+    gc_debug("3. Make Frame living");
     for (Frame* f = stack_top; f; f = f->next)
     {
         for (int i = 0; i < f->size; i++)
@@ -325,6 +328,25 @@ void collect_garbage()
             *f->vars[i] = make_living(*f->vars[i]);
         }
     }
+
+    Object** jit_st = jit_stack();
+    int jit_objects = 0;
+
+    gc_debug("4. Fixing JIT objects");
+
+    for (int i = 0; jit_st && jit_st[i] != JitEnd; i++)
+    {
+        gc_debug("jit_st[%d] %p", i, jit_st[i]);
+    }
+
+    for (int i = 0; jit_st && jit_st[i] != JitEnd; i++)
+    {
+        jit_st[i] = make_living(jit_st[i]);
+        jit_objects++;
+    }
+
+    gc_debug("Jit objects alive: %d", jit_objects);
+    gc_debug("5. Fixing references");
 
     while (scan_ptr < mem_ptr)
     {
@@ -365,7 +387,7 @@ void collect_garbage()
         grow_memory = true;
     }
 
-    gc_debug("GC done");
+    gc_debug("<<<< GC done");
 }
 
 // Object creation
@@ -1867,7 +1889,7 @@ int main(int argc, char** argv)
     input = stdin;
     srand(time(NULL));
 
-    while ((ch = getopt(argc, argv, "dgesxm:qr:")) != -1)
+    while ((ch = getopt(argc, argv, "dgem:qr:")) != -1)
     {
         switch (ch)
         {
@@ -1884,7 +1906,12 @@ int main(int argc, char** argv)
             break;
 
         case 'g':
+#ifdef NDEBUG
+            printf("The -g flag is not available in optimized binaries\n");
+            return 1;
+#else
             verbose_gc = true;
+#endif
             break;
 
         case 'd':
@@ -1902,6 +1929,13 @@ int main(int argc, char** argv)
 
         default:
             printf("Unknown option: %c\n", ch);
+            printf("Options: \n"
+                   " -r SEED    Set random seed\n"
+                   " -m MEM_PCT Set garbage collection threshold\n"
+                   " -e         Turn on input echoing\n"
+                   " -g         Verbose GC\n"
+                   " -d         Debug output\n"
+                   " -q         No output\n");
             return 1;
         }
     }

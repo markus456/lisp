@@ -2376,10 +2376,17 @@ Object* jit_eval(Object* fn, Object* args)
         return Nil;
     }
 
-    Object* func_args[len + 1];
-    Object* func_stack[JIT_STACK_SIZE];
-    func_stack[0] = JitEnd;
-    s_jit_stack = func_stack;
+    int n_args = 0;
+    Object* stack[JIT_STACK_SIZE];
+
+#ifndef NDEBUG
+    for (Object** p = stack; p < stack + JIT_STACK_SIZE; p++)
+    {
+        *p = JitPoison;
+    }
+#endif
+
+    s_jit_stack = stack;
 
     // The function arguments are bound in the reverse order they are declared to the
     // scope. Each value is copied into the stack buffer that is then passed
@@ -2387,12 +2394,17 @@ Object* jit_eval(Object* fn, Object* args)
     // to be stored in RDI and a temporary stack pointer to be in RSI.
     for (Object* o = args; o != Nil; o = cdr(o))
     {
-        debug("Arg[%d] = %p", len, cdr(car(o)));
-        func_args[--len] = cdr(car(o));
+        int type = get_type(cdr(car(o)));
+        debug("Arg[%d] = %p %s %s", len, cdr(car(o)), get_type_name(type),
+              type == TYPE_SYMBOL ? get_symbol(cdr(car(o))) : "");
+        stack[len - n_args - 1] = cdr(car(o));
+        ++n_args;
     }
 
+    stack[n_args] = JitEnd;
     JitFunc func = (JitFunc)func_jit_mem(fn);
-    Object* ret = func(func_args, func_stack);
+    debug("Calling %s", get_symbol_by_pointed_value(fn));
+    Object* ret = func(stack, stack + n_args);
     s_jit_stack = NULL;
     return ret;
 }
