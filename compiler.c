@@ -1765,8 +1765,8 @@ bool bite_compile_cons(uint8_t** mem, Bite* bite)
     // REG_ARGS is REG_RDI (1st argument) and REG_STACK is REG_RSI (2nd
     // argument). Since we store the arguments on the stack, the stack register
     // must be the last one that's moved.
-    EMIT_MOV64_REG_OFF8(REG_RDI, REG_STACK, -OBJ_SIZE * 1);
-    EMIT_MOV64_REG_OFF8(REG_RSI, REG_STACK, -OBJ_SIZE * 2);
+    EMIT_MOV64_REG_OFF8(REG_RDI, REG_STACK, -OBJ_SIZE * 2);
+    EMIT_MOV64_REG_OFF8(REG_RSI, REG_STACK, -OBJ_SIZE * 1);
     EMIT_MOV64_REG_IMM64(REG_RET, (intptr_t)compiled_cons);
     EMIT_CALL_REG(REG_RET);
 
@@ -1774,7 +1774,11 @@ bool bite_compile_cons(uint8_t** mem, Bite* bite)
     EMIT_POP(REG_ARGS);
 
     // Then move back the result of the function call
-    EMIT_MOV64_REG_REG(get_register(bite->arg1), REG_RET);
+    if (get_register(bite->arg1) != REG_RET)
+    {
+        EMIT_MOV64_REG_REG(get_register(bite->arg1), REG_RET);
+    }
+
     FREE_STACK(OBJ_SIZE * 2);
 
     for (int r = TEMP_REGISTERS - 1; r >= 0; r--)
