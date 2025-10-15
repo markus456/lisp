@@ -334,12 +334,12 @@ void collect_garbage()
 
     gc_debug("4. Fixing JIT objects");
 
-    for (int i = 0; jit_st && jit_st[i] != JitEnd; i++)
+    for (int i = 0; jit_st[i] != JitEnd; i++)
     {
         gc_debug("jit_st[%d] %p", i, jit_st[i]);
     }
 
-    for (int i = 0; jit_st && jit_st[i] != JitEnd; i++)
+    for (int i = 0; jit_st[i] != JitEnd; i++)
     {
         jit_st[i] = make_living(jit_st[i]);
         jit_objects++;
@@ -1888,6 +1888,7 @@ int main(int argc, char** argv)
     int ch;
     input = stdin;
     srand(time(NULL));
+    int jit_stack_size = 1024 * 1024 * 16;
 
     while ((ch = getopt(argc, argv, "dgem:qr:")) != -1)
     {
@@ -1927,11 +1928,16 @@ int main(int argc, char** argv)
             quiet = true;
             break;
 
+        case 'j':
+            jit_stack_size = atoi(optarg);
+            break;
+
         default:
             printf("Unknown option: %c\n", ch);
             printf("Options: \n"
                    " -r SEED    Set random seed\n"
                    " -m MEM_PCT Set garbage collection threshold\n"
+                   " -j SIZE    Set the size of the JIT stack\n"
                    " -e         Turn on input echoing\n"
                    " -g         Verbose GC\n"
                    " -d         Debug output\n"
@@ -1953,6 +1959,8 @@ int main(int argc, char** argv)
     mem_root = aligned_alloc(ALLOC_ALIGN, memory_size);
     mem_ptr = mem_root;
     mem_end = mem_root + memory_size / 2;
+
+    jit_stack_set_size(jit_stack_size);
 
     define_builtins();
 

@@ -18,5 +18,6 @@ void jit_compile(Object* scope, Object* args);
 
 // Returns a NULL pointer if there's no JIT call in progress
 Object** jit_stack();
+void jit_stack_set_size(size_t size);
 
 void jit_free();
