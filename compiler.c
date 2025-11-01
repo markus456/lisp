@@ -1582,23 +1582,25 @@ bool is_redundant_argument_move(Bite* bite, int i)
     return bite->op == OP_PARAMETER && (intptr_t)bite->arg1 == i * OBJ_SIZE;
 }
 
-int count_redundant_moves(Bite* bite, int len)
+void copy_to_arguments(uint8_t** mem, Bite* b, int len, int i)
 {
-    int redundant_moves = 0;
-    int i = 0;
-
-    for (Bite* b = bite->arg1; b; b = b->arg2)
+    if (b->arg2)
     {
-        if (is_redundant_argument_move(b->arg1, len - i - 1))
-        {
-            debug("Redundant move of argument %s at offset %d", b->arg1->id, len - i - 1);
-            ++redundant_moves;
-        }
-
-        i++;
+        copy_to_arguments(mem, b->arg2, len, i + 1);
     }
 
-    return redundant_moves;
+    if (!is_redundant_argument_move(b->arg1, len - i - 1))
+    {
+        if (reglist_in_use(b->arg1->reg))
+        {
+            EMIT_MOV64_OFF8_REG(REG_ARGS, get_register(b->arg1), OBJ_SIZE * (len - i - 1));
+        }
+        else
+        {
+            POP_FROM_STACK(get_register(b->arg1));
+            EMIT_MOV64_OFF8_REG(REG_ARGS, get_register(b->arg1), OBJ_SIZE * (len - i - 1));
+        }
+    }
 }
 
 bool bite_compile_recurse(uint8_t** mem, Bite* bite)
@@ -1609,8 +1611,6 @@ bool bite_compile_recurse(uint8_t** mem, Bite* bite)
     {
         len++;
     }
-
-    int redundant_moves = count_redundant_moves(bite, len);
 
     // Whenever recursion is about to happen, there should be no registers in use.
     assert(reglist->size == TEMP_REGISTERS);
@@ -1642,7 +1642,6 @@ bool bite_compile_recurse(uint8_t** mem, Bite* bite)
             }
             else
             {
-                assert(len - redundant_moves >= TEMP_REGISTERS);
                 debug("%s stored on stack for recursion for arg offset %d", b->arg1->id, i);
                 PUSH_TO_STACK(get_register(b->arg1));
             }
@@ -1657,30 +1656,10 @@ bool bite_compile_recurse(uint8_t** mem, Bite* bite)
         debug("%s uses register %d from free register list", bite->id, bite->reg);
     }
 
-    i = 0;
-
-    for (Bite* b = bite->arg1; b; b = b->arg2)
-    {
-        if (!is_redundant_argument_move(b->arg1, len - i - 1))
-        {
-            if (reglist_in_use(b->arg1->reg))
-            {
-                EMIT_MOV64_OFF8_REG(REG_ARGS, get_register(b->arg1), OBJ_SIZE * (len - i - 1));
-            }
-            else
-            {
-                POP_FROM_STACK(get_register(b->arg1));
-                EMIT_MOV64_OFF8_REG(REG_ARGS, get_register(b->arg1), OBJ_SIZE * (len - i - 1));
-            }
-        }
-
-        i++;
-    }
-
-    if (len - redundant_moves > TEMP_REGISTERS)
-    {
-        FREE_STACK(OBJ_SIZE * (len - TEMP_REGISTERS));
-    }
+    // Copy back the evaluated values into the argument list. The copying must
+    // be done in reverse as some values might've been pushed onto the stack by
+    // the previous step.
+    copy_to_arguments(mem, bite->arg1, len, 0);
 
     // The offset is patched after compilation is complete
     EMIT_JMP_OFF32();
