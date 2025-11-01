@@ -191,4 +191,5 @@ void debug_print(Object* obj);
 
 void error(const char* fmt, ...);
 
+void debugf(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
 void debug(const char* fmt, ...) __attribute__((format(printf, 1, 2)));

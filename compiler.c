@@ -31,6 +31,48 @@ typedef bool (*CompileFunc)(Object* scope, Object* name, Object* self, Object* p
 //The pointer to the start of the JIT stack
 Object** s_jit_stack = NULL;
 
+const char* find_by_func_addr(void* addr)
+{
+    for (CompiledFunction* c = compiled_functions; c; c = c->next)
+    {
+        if (c->memory == addr)
+        {
+            return get_symbol_by_pointed_value(c->name);
+        }
+    }
+
+    return "<unknown address>";
+}
+
+bool not_in_gdb()
+{
+    bool no_gdb = true;
+    FILE* f = fopen("/proc/self/status", "r");
+    char buffer[4096];
+
+    if (f)
+    {
+        while (fgets(buffer, sizeof(buffer), f))
+        {
+            if (strstr(buffer, "TracerPid:"))
+            {
+                for (size_t i = 0; i < sizeof(buffer) && buffer[i]; i++)
+                {
+                    if (isdigit(buffer[i]) && buffer[i] != '0')
+                    {
+                        // The TracerPid value is non-zero meaning someone is tracing the process
+                        no_gdb = false;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    fclose(f);
+    return no_gdb;
+}
+
 // The declarations for builtins that we know of and can compile
 Object* builtin_if(Object* scope, Object* args);
 Object* builtin_less(Object* scope, Object* args);
@@ -2262,7 +2304,7 @@ bool compile_to_bytecode(Object* scope, Object* name, Object* self, Object* para
 
         debug("Compiled into %lu bytes.", ptr - (uint8_t*)memory);
 
-        if (debug_on())
+        if (debug_on() && not_in_gdb())
         {
             int pid = getpid();
             char buffer[1024];
@@ -2385,24 +2427,36 @@ Object* jit_eval(Object* fn, Object* args)
     }
 #endif
 
+    debugf("Calling %s", get_symbol_by_pointed_value(fn));
+
     // The function arguments are bound in the reverse order they are declared to the
     // scope. Each value is copied into the stack buffer that is then passed
     // into the compiled function. The compiled functions expect the arguments
     // to be stored in RDI and a temporary stack pointer to be in RSI.
     for (Object* o = args; o != Nil; o = cdr(o))
     {
-        int type = get_type(cdr(car(o)));
-        debug("Arg[%d] = %p %s %s", len, cdr(car(o)), get_type_name(type),
-              type == TYPE_SYMBOL ? get_symbol(cdr(car(o))) : "");
         s_jit_stack[len - n_args - 1] = cdr(car(o));
         ++n_args;
     }
 
+    for (int i = 0; i < n_args; i++)
+    {
+        Object* o = s_jit_stack[i];
+        int type = get_type(o);
+        debugf(" Arg[%d] = %p %s %s", i, o, get_type_name(type),
+               type == TYPE_SYMBOL ? get_symbol(o) : "");
+    }
+
+    debugf("\n");
+
     s_jit_stack[n_args] = JitEnd;
     JitFunc func = (JitFunc)func_jit_mem(fn);
-    debug("Calling %s", get_symbol_by_pointed_value(fn));
     Object* ret = func(s_jit_stack, s_jit_stack + n_args);
     s_jit_stack[0] = JitEnd;
+
+    debug("Call returned: %p %s %s", ret, get_type_name(get_type(ret)),
+          get_type(ret) == TYPE_SYMBOL ? get_symbol(ret) : "");
+
     return ret;
 }
 

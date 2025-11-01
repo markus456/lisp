@@ -123,6 +123,10 @@ int debug_level = 0;
 #define DEBUG_EXTRA (debug_level >= 2)
 
 #ifdef NDEBUG
+void debugf(const char*, ...)
+{
+}
+
 void debug(const char*, ...)
 {
 }
@@ -131,6 +135,17 @@ void gc_debug(const char*, ...)
 {
 }
 #else
+void debugf(const char* fmt, ...)
+{
+    if (debug_level > DBG_INFO)
+    {
+        va_list args;
+        va_start(args, fmt);
+        vprintf(fmt, args);
+        va_end(args);
+        fflush(stdout);
+    }
+}
 void debug(const char* fmt, ...)
 {
     if (debug_level > DBG_INFO)
