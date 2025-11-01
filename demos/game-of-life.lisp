@@ -133,6 +133,10 @@
              (main_loop (compute_cell_state state nil nil (- screen_width 1) (- screen_height 1)) (+ iter 1)))))
 
 ;; Compile all of the functions
+(compile print_row)
+(compile print_state)
+(compile reset_cursor)
+(compile clear_screen)
 (compile wrap)
 (compile get_xy)
 (compile triplet)
@@ -145,10 +149,6 @@
 (compile compute_cell_state)
 (compile create_start_state)
 (compile main_loop)
-(compile reset_cursor)
-(compile clear_screen)
-(compile print_row)
-(compile print_state)
 
 ;; Start the program
 (clear_screen)
